@@ -49,6 +49,8 @@ proposed transport. Both endpoints verify configured peer UIDs. A claimed JSON U
 correlation identifier is not authentication; a kernel UID does not identify an individual executable among
 same-UID processes. Exact principal mappings, socket custody, framing and final bounds require agreement before
 freezing the wire schema.
+The [proposed execution contract](execution-v1.md) specifies the separate builder process, bounded byte-stream
+handoff, IO budgets, acceptance boundary, journal recovery and artifact-release eligibility.
 
 | Request member | Proposed type and meaning |
 | --- | --- |
@@ -85,6 +87,7 @@ artifact transfer method remain unaccepted.
 | `signature_failed` | Native signing or verification failed; no release |
 | `request_conflict` | Retry identifier reused for a different semantic request; no new effect |
 | `busy` | A different operation is active or awaiting reconciliation; no new build/sign |
+| `release_revoked`, `artifact_expired` | Historical outcome retained; no artifact bytes or new signing on fetch |
 | `outcome_uncertain` | Signature may exist in private staging; no release or automatic blind re-sign |
 
 These codes are proposals for client agreement, not promises about an existing executable.
@@ -165,6 +168,8 @@ and no durable outcome remains uncertain until recovery reconciles private stagi
 It retains the active-operation gate and must neither release nor blindly sign again. Recovery records append to
 the audit instead of rewriting it.
 An uncertain result is not a claim that no signature was created. Audit retention must cover the retry horizon.
+Historical success does not override current admission, revocation or evidence freshness on a later fetch.
+Inspection may still report that historical outcome while artifact release refuses with zero artifact bytes.
 
 ## Acceptance controls
 
