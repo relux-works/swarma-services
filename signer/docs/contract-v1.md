@@ -35,6 +35,8 @@ repository, identifier, build recipe or historical ad-hoc pilot signature cannot
 allowlist admission or production signing policy. Broker facts come from the actual broker source and custodian.
 The proxy consumer's existing private-store and failure-before-listener guarantees remain its own contract;
 a signing receipt does not establish broker deployment, envelope migration or private-host qualification.
+The [broker compatibility inputs](broker-compatibility-v1.md) record its known source boundary and remaining
+recipe and installation limits.
 
 ## Proposed request and result envelope
 
@@ -93,6 +95,13 @@ wrong-head or unavailable evidence refuses. Caller assertions, tags, commit trai
 review comment cannot establish independent acceptance. Provider records must match the actual delivery
 mechanisms used by both clients; no approval-only adapter is assumed.
 
+A legitimate delivery form can record an independently received exact-head verdict in a GitHub COMMENT review
+when the publishing account cannot approve its own PR. The service must also verify the independent verdict's
+provenance and exact candidate binding; the COMMENT alone is insufficient. A successfully read, empty inventory
+of checks under an independently established no-required-check policy is distinct from green CI. Unknown rules,
+unavailable inventory or missing required checks cannot be interpreted as that empty case. Review-receipt format
+and verification remain to be agreed; this contract introduces no shared review framework dependency.
+
 Recheck authority and admission immediately before build and before sign, with explicit freshness and revocation
 rules. The accepted adapter must define how an exact reviewed signed head remains attributable after a permitted
 nonrewriting landing. Freeze those evidence forms with clients before writing the admission implementation.
@@ -102,8 +111,8 @@ nonrewriting landing. Freeze those evidence forms with clients before writing th
 The builder is a distinct unprivileged account with no signing key or signer-home access. It uses a clean exact
 commit, a trusted pinned recipe/toolchain, bounded resources, and a sanitized environment without inherited
 authentication. Go recipes use `GOTOOLCHAIN=local`, `-mod=readonly`, `-trimpath` and verified dependency sums;
-they do not run caller commands or `go generate`. Actual client entrypoints, architectures, dependency/network
-policy and reproducibility requirements remain to be confirmed.
+they do not run caller commands or `go generate`. Exact client architectures, dependency/network policy and
+deterministic build inputs remain to be confirmed.
 
 Account separation alone is not a general filesystem sandbox. The host contract must demonstrate that a build
 cannot read the signer home/keychain or secrets exposed elsewhere on the host. Isolation controls run in safe
@@ -112,8 +121,10 @@ fixtures; source tests never authorize probing live keys or user data.
 The builder emits a bounded regular artifact and receipt binding product, repository, commit, recipe/toolchain,
 target, unsigned SHA-256 and exact byte size. The signer opens the input without following links, creates its
 own private immutable snapshot, and independently verifies size/hash and receipt. It refuses links, replacement,
-truncation, mutation or mismatch. The builder cannot alter the snapshot or trusted signing policy. Independent
-rebuild comparison and any determinism envelope need agreement before a reproducibility claim is made.
+truncation, mutation or mismatch. The builder cannot alter the snapshot or trusted signing policy. The unsigned
+artifact must reproduce byte for byte in an independent rebuild under the same recorded deterministic inputs;
+a mismatch refuses signing. Recipes must bind version, date, VCS and other build inputs instead of inheriting
+ambient values. The exact pinned recipe and independent rebuild procedure remain to be agreed before building.
 
 ## Signing, audit and recovery
 
@@ -156,7 +167,7 @@ Every selected test lane runs and reports even if an earlier lane fails.
 | Admission | First confirmed secret-tool admission; later qualified release | Missing admission/unknown identifier; no build/sign. Later release has no presence prompt |
 | Authority | Exact owner-signed independently reviewed checked landed commit | Wrong signer, unlanded, unreviewed, wrong-head review, missing/unknown checks; no sign |
 | Builder | Real trusted exact-source build | Signer builds or builder reaches signing secrets; intended isolation refusal, no release |
-| Snapshot | Matching immutable artifact/receipt | Symlink, substitution, truncation or hash mismatch; no sign |
+| Snapshot | Matching immutable artifact/receipt and independent unsigned rebuild | Symlink, substitution, truncation, hash or reproducibility mismatch; no sign |
 | Signature | Pinned P-256 identity and native verification | Ad-hoc/wrong identity/DR mismatch; no release |
 | Audit | Durable intent then signature then durable outcome | Missing intent prevents sign; failed outcome withholds artifact without claiming no signature |
 | Recovery | Same completed request returns its result | Changed-input retry conflicts; interrupted/parallel retry cannot duplicate signing or release uncertain output |
