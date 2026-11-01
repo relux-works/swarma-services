@@ -1,0 +1,5 @@
+.temp/
+.task-board/
+.codex/
+.claude/
+.DS_Store
