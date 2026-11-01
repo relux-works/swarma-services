@@ -60,3 +60,9 @@ Nearby valid controls must show that a complete approved closure builds and prin
 dependencies/toolchain pins, forbidden network/helper execution, changed inputs, a wrong label or differing
 unsigned bytes refuse before signing. Target-qualified signature/entitlement and normal CLI behavior checks
 remain required; source inspection and a local tool-version readback do not satisfy them.
+
+The proposed transport entry/type limits are not qualified for the whole observed source/cache inventory. The
+necessary-and-sufficient `./cmd/curator` closure, including embedded assets and dependencies, remains unknown.
+Bind every inclusion and exclusion in the recipe manifest and verify the actual closure. Source links/Gitlinks
+cannot be silently discarded; if a required input is outside the finite subset, revise that contract explicitly
+before building. A warm-cache binary built with other flags does not qualify the new recipe or its time budget.

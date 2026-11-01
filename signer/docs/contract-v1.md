@@ -115,14 +115,18 @@ mechanism; no approval-only adapter is assumed.
 A legitimate delivery form can record an independently received exact-head verdict in a GitHub COMMENT review
 when the publishing account cannot approve its own PR. The service must also verify the independent verdict's
 provenance and exact candidate binding; the COMMENT alone is insufficient. For the first adapter, an eligible
-COMMENT explicitly identifies the independent verdict's room ID and event ID. The adapter fetches that exact
-event and checks its authenticated sender, exact source head, PR and explicit acceptance without unresolved
-blocking findings. Historical comments without that reference do not pass this forward requirement.
+COMMENT carries the exact head, verdict and one stored-verdict-body SHA-256 digest. Messaging provenance stays
+in private process evidence. The adapter proves a unique exact digest match within configured bounded evidence
+scopes, then checks the authenticated independent sender, exact source head, PR and explicit acceptance without
+unresolved blocking findings. Incomplete coverage never establishes uniqueness. Historical comments without
+the digest do not pass this forward requirement.
 The [authority adapter contract](authority-v1.md) defines the separate credential principal, protected projection
 and present trust limits. A successfully read, empty inventory
 of checks under an independently established no-required-check policy is distinct from green CI. Unknown rules,
 unavailable inventory or missing required checks cannot be interpreted as that empty case. Exact parsing must
 be qualified against the actual forward-form receipt before freeze; no shared review framework is required.
+The [finite protocol proposal](protocol-v1.md) specifies request/result variants, protected projections and
+bounded source DATA, including supplied module-receipt content rather than a digest of unavailable data.
 
 Recheck authority and admission immediately before build and before sign, with explicit freshness and revocation
 rules. The accepted adapter must define how an exact reviewed signed head remains attributable after a permitted

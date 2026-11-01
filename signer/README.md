@@ -24,9 +24,14 @@ The [proposed version 1 contract](docs/contract-v1.md) defines the source, build
 Client parameters and host custody are awaiting confirmation; this document does not describe an installed service.
 The [authority adapter](docs/authority-v1.md) keeps evidence credentials outside the signer and builder; the
 [first Curator build proposal](docs/curator-build-v1.md) separates known source facts from unqualified recipe inputs.
+The [finite protocol proposal](docs/protocol-v1.md) and its declarative counterexamples specify expected behavior;
+they are not executable parser or runtime checks.
 
 ## Tools
 
 This subproject currently contains documentation only. No build, signing or installation command is shipped yet.
 Use `git diff --check` from the repository root to check documentation patches. Build and verification artifacts
 belong in the ignored `.temp/` directory until the service defines its own supported output paths.
+Python 3 can check that the declarative fixture file is valid JSON:
+`mkdir -p .temp && python3 -m json.tool signer/docs/examples/contract-cases-v1.json > .temp/contract-cases-v1.json`.
+That command validates JSON serialization only.

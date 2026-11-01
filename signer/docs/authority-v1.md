@@ -31,10 +31,27 @@ grants are a separate change and are not an additional prerequisite for this agr
 
 ## Exact review and source binding
 
-An eligible platform review identifies the full candidate head and contains one unambiguous verdict reference:
-the exact Matrix room ID and event ID. The adapter fetches that event from the configured origin and verifies:
+An eligible platform review identifies the full candidate head, declares its verdict and contains one neutral
+record digest. The exact line accepts either plain `Verdict record digest: sha256:<64 lowercase hex>` or the same
+digest enclosed in one pair of Markdown backticks. Exactly one such line is required. Messaging room/event/sender
+provenance remains private and is never added to product comments or PR descriptions.
+The first supported platform text starts `Independent source review: **ACCEPT** for exact head ` followed by
+the full head and base in Markdown code spans. Those values must match the provider record and admitted source;
+an occurrence in a quotation, another head or an unrelated ACCEPT sentence does not qualify.
 
-1. The room is admitted, the returned event identity matches the reference, and the sender is an allowed
+Hash UTF-8 bytes of the stored verdict body string after JSON decoding, without an added newline, trimming,
+Unicode normalization or rendered-HTML substitution. The adapter searches only configured evidence scopes,
+with the absolute 30s authority budget. The proposed qualifying interval starts 24h before the platform review
+timestamp and ends 300s after it. Coverage is complete at authenticated per-scope read frontiers captured for
+the observation; this proves no absence of future events and claims no atomic snapshot across scopes.
+At most four configured scopes, 256 aggregate pages, 16384 events and 16 MiB of decoded bodies are read.
+Exceeding a bound, incomplete coverage or unknown frontier refuses as authority unavailable. A local index may
+accelerate a complete read but cannot manufacture coverage. Nonmatching private bodies are not retained in logs.
+
+Exactly one matching stored body across the complete configured scope is required; zero or multiple matches
+reject. Repeated pagination of the same event is not a second event. The adapter then verifies:
+
+1. The evidence scope is admitted, the matched event is current and intact, and the sender is an allowed
    independent reviewer rather than the authenticated producer of that candidate.
 2. The verdict binds the canonical repository, PR and full exact candidate head; it explicitly accepts that head
    with no unresolved blocking findings. Quoted acceptance, caller JSON or finding the word ACCEPT is insufficient.
@@ -43,9 +60,11 @@ the exact Matrix room ID and event ID. The adapter fetches that event from the c
    verification also pass for that exact commit. An unknown rule or unavailable inventory is not success.
 
 Receipt grammar must be frozen against an actual forward-form verdict and COMMENT. A historical platform comment
-without the explicit room/event reference is a negative witness for this new citation rule, even if a separate
+without the digest is a negative witness for this binding, even if a separate
 authenticated verdict establishes its historical provenance. Do not edit historical comments to manufacture a
 passing control. A draft, running checks, reviewer assignment or an unlanded accepted candidate is ineligible.
+Digest lookup establishes historical provenance only. Current check, landing, review-withdrawal and admission/
+revocation evidence remain independent release gates; a bounded historical search cannot establish their absence.
 
 ## Protected local projection
 
@@ -57,7 +76,7 @@ An evidence peer cannot submit artifact bytes as a successful build.
 
 The projection records canonical repository, commit and tree; PR and platform-review identities; verdict room,
 event, authenticated sender, server timestamp and exact fetched body SHA-256; owner-signature verification;
-check-policy/inventory/result references; observed default-branch head and landing relationship; acquisition
+bounded lookup scope/coverage/uniqueness evidence; check-policy/inventory/result references; observed default-branch head and landing relationship; acquisition
 references; policy identity; observation and expiry times; and an explicit verdict with sanitized reason.
 Identity/reference values are data, never commands or arbitrary network destinations. The maximum JSON result
 size is 16384 bytes and authority refresh has the existing absolute 30s budget. Detailed bounded wire member
@@ -73,7 +92,8 @@ and current policy/revocation checks retain the execution contract's maximum 300
 
 | Valid control | Intended refusal and post-state |
 | --- | --- |
-| Actual cited verdict, admitted independent sender, exact accepted signed/checked/landed head | COMMENT alone, uncited historical record, quoted ACCEPT, producer sender, other room/origin, wrong head or PR: authority rejected, no sign |
+| Actual digest-bound verdict, complete unique lookup, admitted independent sender and exact eligible head | COMMENT alone, no digest, changed body, zero/multiple matches, quoted ACCEPT, producer sender, wrong source/head/PR: authority rejected, no sign |
+| Complete configured-scope lookup within its finite budget | One match in partial/truncated history, unknown frontier or exhausted deadline: authority unavailable, no sign |
 | Current exact-head evidence under the admitted policy | Missing event, unknown checks, unavailable provider, expired evidence: refuse without treating absence as acceptance |
 | Bound projection from the configured adapter peer | Caller-forged projection, replayed nonce or another policy: refuse before build/sign |
 | Adapter reads its own item through its pinned signed binary | Generic reader, another signing identity or team-OU-only match: item access must fail in an isolated fixture |

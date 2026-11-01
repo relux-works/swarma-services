@@ -1,0 +1,451 @@
+{
+  "status": "NON_EXECUTABLE_PROPOSED_EXPECTATIONS",
+  "scope": "Synthetic shape/contract expectations only; no example is real release authority, runtime or host-isolation evidence.",
+  "request_cases": [
+    {
+      "name": "complete_five_fields",
+      "input_utf8": "{\"version\":1,\"product_id\":\"curator\",\"repository\":\"curator-core\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"request_id\":\"fixture_1\"}",
+      "expected_decode": "accept_shape",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "unknown_path",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"fixture_1\", \"path\": \"/tmp/caller-binary\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "duplicate_version",
+      "input_utf8": "{\"version\":1,\"version\":1,\"product_id\":\"curator\",\"repository\":\"curator-core\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"request_id\":\"fixture_1\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "wrong_version",
+      "input_utf8": "{\"version\": 2, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"fixture_1\"}",
+      "expected_decode": "unsupported_version",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "null_commit",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": null, \"request_id\": \"fixture_1\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "short_commit",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"fixture_1\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "uppercase_commit",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\", \"request_id\": \"fixture_1\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "empty_request_id",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "oversize_request_id",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "exponent_version",
+      "input_utf8": "{\"version\":1e0,\"product_id\":\"curator\",\"repository\":\"curator-core\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"request_id\":\"fixture_1\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "trailing_object",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"fixture_1\"}{}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "bom",
+      "input_utf8": "﻿{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"fixture_1\"}",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    },
+    {
+      "name": "over_4096_bytes",
+      "input_utf8": "{\"version\": 1, \"product_id\": \"curator\", \"repository\": \"curator-core\", \"commit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"request_id\": \"fixture_1\"}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ",
+      "expected_decode": "invalid_request",
+      "required_effect": "No build/sign during decode; source authority is a separate gate."
+    }
+  ],
+  "authority_cases": [
+    {
+      "name": "exact_digest_complete_unique_lookup_and_independent_sender",
+      "fixture_facts": {
+        "authenticated_reviewer": "fixture-reviewer",
+        "authenticated_producer": "fixture-producer",
+        "same_head": true,
+        "same_pr": true,
+        "explicit_accept_without_blockers": true,
+        "owner_signed": true,
+        "checks_qualified": true,
+        "landed": true,
+        "has_digest": true,
+        "complete_lookup": true,
+        "matching_events": 1
+      },
+      "expected_authority": "eligible_if_all_real_evidence_verified"
+    },
+    {
+      "name": "comment_without_neutral_digest",
+      "fixture_facts": {
+        "has_digest": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "producer_is_reviewer",
+      "fixture_facts": {
+        "authenticated_reviewer": "fixture-producer",
+        "authenticated_producer": "fixture-producer"
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "wrong_head",
+      "fixture_facts": {
+        "same_head": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "wrong_pr",
+      "fixture_facts": {
+        "same_pr": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "quoted_accept_only",
+      "fixture_facts": {
+        "explicit_accept_without_blockers": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "empty_inventory_unknown_policy",
+      "fixture_facts": {
+        "inventory_empty": true,
+        "policy_known_no_required": false
+      },
+      "expected_authority": "authority_unavailable"
+    },
+    {
+      "name": "reviewer_assigned_not_verdict",
+      "fixture_facts": {
+        "reviewer_accepted_assignment": true,
+        "actual_verdict": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "signed_and_accepted_but_draft_unlanded",
+      "fixture_facts": {
+        "owner_signed": true,
+        "independent_accept": true,
+        "landed": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "replayed_projection_nonce",
+      "fixture_facts": {
+        "nonce_matches": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "expired_or_clock_unknown",
+      "fixture_facts": {
+        "lease_current": false
+      },
+      "expected_authority": "authority_unavailable"
+    },
+    {
+      "name": "changed_verdict_body",
+      "fixture_facts": {
+        "body_digest_matches": false
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "zero_digest_matches",
+      "fixture_facts": {
+        "complete_lookup": true,
+        "matching_events": 0
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "multiple_digest_matches",
+      "fixture_facts": {
+        "complete_lookup": true,
+        "matching_events": 2
+      },
+      "expected_authority": "authority_rejected"
+    },
+    {
+      "name": "one_match_in_partial_history",
+      "fixture_facts": {
+        "complete_lookup": false,
+        "matching_events": 1
+      },
+      "expected_authority": "authority_unavailable"
+    },
+    {
+      "name": "lookup_deadline_exhausted",
+      "fixture_facts": {
+        "complete_lookup": false,
+        "deadline_exhausted": true
+      },
+      "expected_authority": "authority_unavailable"
+    },
+    {
+      "name": "wrong_product_or_configured_scope",
+      "fixture_facts": {
+        "product_matches": false,
+        "scope_configured": false
+      },
+      "expected_authority": "authority_rejected"
+    }
+  ],
+  "source_cases": [
+    {
+      "name": "bounded_regular_source_data",
+      "entry": {
+        "root": "source",
+        "path": "cmd/curator/main.go",
+        "kind": "file",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "accept_shape_only_not_source_authority"
+    },
+    {
+      "name": "path_escape",
+      "entry": {
+        "root": "source",
+        "path": "../outside",
+        "kind": "file",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "reject_path_before_write"
+    },
+    {
+      "name": "absolute_path",
+      "entry": {
+        "root": "source",
+        "path": "/outside",
+        "kind": "file",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "reject_path_before_write"
+    },
+    {
+      "name": "backslash_path",
+      "entry": {
+        "root": "source",
+        "path": "cmd\\outside",
+        "kind": "file",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "reject_path_before_write"
+    },
+    {
+      "name": "special_file",
+      "entry": {
+        "root": "source",
+        "path": "cmd/curator/main.go",
+        "kind": "device",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "reject_entry_before_write"
+    },
+    {
+      "name": "setuid_mode",
+      "entry": {
+        "root": "source",
+        "path": "cmd/curator/main.go",
+        "kind": "file",
+        "mode": "104755",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "reject_entry_before_write"
+    },
+    {
+      "name": "oversized_file",
+      "entry": {
+        "root": "source",
+        "path": "cmd/curator/main.go",
+        "kind": "file",
+        "mode": "100644",
+        "size": 67108865,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "reject_bound_before_allocation"
+    },
+    {
+      "name": "hash_mismatch",
+      "entry": {
+        "root": "source",
+        "path": "cmd/curator/main.go",
+        "kind": "file",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a",
+      "expected_shape": "reject_stream_before_build"
+    },
+    {
+      "name": "symlink_escape",
+      "entries": [
+        {
+          "root": "source",
+          "path": "link",
+          "kind": "symlink",
+          "mode": "120000",
+          "size": 10,
+          "sha256": "62ca1d92c4a3fc44a5fa30d1ddc593be1a9945ca21c0821af53d4f2b604075e7",
+          "link_target": "../outside"
+        }
+      ],
+      "expected_shape": "reject_graph_before_write"
+    },
+    {
+      "name": "symlink_ancestor",
+      "description": "A validated link at pkg and a file pkg/main.go must never be extracted through that link.",
+      "expected_shape": "reject_graph_before_write"
+    },
+    {
+      "name": "short_stream",
+      "entry": {
+        "root": "source",
+        "path": "cmd/curator/main.go",
+        "kind": "file",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e",
+      "expected_shape": "reject_stream_before_build"
+    },
+    {
+      "name": "extra_stream",
+      "entry": {
+        "root": "source",
+        "path": "cmd/curator/main.go",
+        "kind": "file",
+        "mode": "100644",
+        "size": 13,
+        "sha256": "df1d036cbbf3df46e2045071e082245ece204c7f53ecf0a4e022bff9bb228f47",
+        "link_target": ""
+      },
+      "stream_hex": "7061636b616765206d61696e0a78",
+      "expected_shape": "reject_stream_before_build"
+    },
+    {
+      "name": "internal_source_symlink",
+      "description": "A regular source main.go and a sibling link to main.go, no link ancestor or escape.",
+      "expected_shape": "accept_graph_shape_only_not_source_authority"
+    },
+    {
+      "name": "unsupported_required_gitlink",
+      "entry": {
+        "root": "source",
+        "path": "skills/example",
+        "kind": "gitlink",
+        "mode": "160000",
+        "size": 0,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "link_target": ""
+      },
+      "expected_shape": "reject_unsupported_kind_before_write_no_silent_omission"
+    },
+    {
+      "name": "inventory_over_entry_limit",
+      "entry_count": 8264,
+      "expected_shape": "reject_bound_no_claim_about_minimum_target_closure"
+    }
+  ],
+  "required_post_state": {
+    "decode_rejection": "no accepted gate/build/sign",
+    "authority_rejection": "no build/sign; preserved rejection record permitted",
+    "source_rejection": "no compilation/sign; remove only private partial data",
+    "possible_signing_effect": "uncertain, withhold release and never blindly re-sign"
+  },
+  "module_cases": [
+    {
+      "name": "inline_receipt_zero_external_modules",
+      "receipt_shape": {
+        "source_go_mod_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "source_go_sum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "modules": []
+      },
+      "expected_shape": "accept_shape_only_given_matching_source_files_and_empty_selected_graph"
+    },
+    {
+      "name": "receipt_digest_without_content",
+      "expected": "reject_missing_receipt_before_compile"
+    },
+    {
+      "name": "source_sum_mismatch",
+      "expected": "reject_original_sum_mismatch_before_compile"
+    },
+    {
+      "name": "mutated_module_with_self_consistent_cache_hash",
+      "expected": "reject_against_source_go_sum_before_compile"
+    },
+    {
+      "name": "missing_selected_module_or_metadata",
+      "expected": "reject_incomplete_offline_closure_no_download_or_sum_write"
+    },
+    {
+      "name": "metadata_only_for_compiled_module",
+      "expected": "reject_missing_module_source_before_compile"
+    },
+    {
+      "name": "module_directory_outside_receipt",
+      "expected": "reject_unclaimed_input_before_compile"
+    }
+  ]
+}

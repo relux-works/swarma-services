@@ -39,7 +39,10 @@ a compiled artifact. The signer authenticates its configured peer, copies the bo
 and binds their digests to the operation before handing the same verified bytes to the builder. A bundle that
 cannot establish the requested object/tree or dependency closure refuses; authentication alone is insufficient.
 Extraction must reject traversal, escaping links and writes outside the private workspace. Source-data framing,
-capacity and the exact dependency manifest remain freeze inputs; none is an unbounded upload allowance.
+capacity and the exact dependency closure remain qualification inputs; none is an unbounded upload allowance.
+The [finite protocol](protocol-v1.md) supplies a proposed inline module receipt and exact bounded DATA format.
+Whole source can contain links or Gitlinks outside the accepted transport subset. The actual target's necessary
+input closure must be qualified explicitly; unsupported required inputs cannot be silently omitted or transformed.
 
 The builder verifies those inputs, creates two clean workspaces from them and has no network or credential
 access. Dependencies are preverified read-only inputs to both builds; the compiler cannot fetch missing modules
