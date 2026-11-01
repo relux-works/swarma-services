@@ -30,6 +30,12 @@ exists. It shares no internal packages with other services or clients. Curator s
 broker integrate through a versioned external contract and configuration seams. Their standalone MVPs do not
 depend on a new shared framework. This interface neither reads nor returns OAuth tokens, KEKs or private keys.
 
+The network proxy application and its separately provisioned KEK broker are distinct products. An application
+repository, identifier, build recipe or historical ad-hoc pilot signature cannot establish the broker's source,
+allowlist admission or production signing policy. Broker facts come from the actual broker source and custodian.
+The proxy consumer's existing private-store and failure-before-listener guarantees remain its own contract;
+a signing receipt does not establish broker deployment, envelope migration or private-host qualification.
+
 ## Proposed request and result envelope
 
 Version 1 is a finite local request/result protocol. Its transport, peer authorization, framing and final
