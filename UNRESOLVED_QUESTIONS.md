@@ -5,7 +5,7 @@
 | Question | Required source | Effect while open |
 | --- | --- | --- |
 | Curator repo/default branch, exact source release, identifier, target, entrypoint, toolchain/recipe digest, dependency policy and entitlements | Curator maintainer | No invented Curator allowlist or recipe |
-| Broker exact release candidate, deterministic recipe, target, toolchain digest, dependency/CGO policy and entitlements | Broker source maintainer and service maintainer | Known repo/identifier/entrypoint are recorded in the broker compatibility inputs; current ad-hoc setup is not an admitted recipe |
+| Later broker release candidate, native deterministic recipe, toolchain/SDK digests, dependency policy and entitlements | Broker source maintainer and service maintainer | Repo/identifier/entrypoint, required CGO/native frameworks and constant-version constraints are known; broker integration follows Curator rollout |
 | Exact signed/reviewed/checked/landed receipt verification, freshness and revocation | Both client delivery owners and service maintainer | Legitimate COMMENT plus independent-verdict form is known; verifiable mapping remains to be agreed |
 | Request/result JSON bounds and grammars, transport authorization, artifact transfer, timeout and retry horizon | Both client maintainers and service maintainer | Version 1 envelope remains proposed |
 | First-admission confirmation record and identity binding; policy changes, revocation and re-admission semantics | Signing custodian and service maintainer under the owner decision | No release-specific approval requirement added |

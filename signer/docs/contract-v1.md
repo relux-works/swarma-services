@@ -3,6 +3,10 @@
 Status: proposed, 2026-11-01. Client and host parameters listed below remain open. This is a source contract
 proposal, not evidence of counterpart acceptance, deployment, key access or installation authority.
 
+The first usable slice serves Curator on `darwin/arm64`, accepts SHA-1 repository object IDs and runs one signing
+operation at a time. Broker compatibility is recorded now; second-client implementation follows Curator rollout
+and dogfooding. Other targets, object formats and parallel signing are outside this slice.
+
 ## Required behavior
 
 The service accepts a configured repository alias and an exact commit for an allowlisted product identifier.
@@ -40,16 +44,18 @@ recipe and installation limits.
 
 ## Proposed request and result envelope
 
-Version 1 is a finite local request/result protocol. Its transport, peer authorization, framing and final
-numeric limits must be confirmed with both clients and the host custodian before freezing a wire schema.
-Transport authorization cannot be inferred from a correlation identifier.
+Version 1 is a finite local request/result protocol. A Unix socket with kernel-provided peer credentials is the
+proposed transport. Both endpoints verify configured peer UIDs. A claimed JSON UID, socket-path possession or
+correlation identifier is not authentication; a kernel UID does not identify an individual executable among
+same-UID processes. Exact principal mappings, socket custody, framing and final bounds require agreement before
+freezing the wire schema.
 
 | Request member | Proposed type and meaning |
 | --- | --- |
 | `version` | Integer `1`; other versions refuse |
 | `product_id` | Configured exact identifier; no caller-selected signing identifier |
 | `repository` | Configured alias paired with that identifier; no URL or path |
-| `commit` | Full exact object ID under the repository's configured object format |
+| `commit` | Full exact lowercase 40-character SHA-1 object ID; other repository formats are unsupported in this slice |
 | `request_id` | Client-scoped correlation and retry key; grammar/length pending client evidence |
 
 Objects reject duplicate or unknown members, missing/null/wrong-type values, trailing content and oversized
@@ -78,6 +84,7 @@ artifact transfer method remain unaccepted.
 | `audit_unavailable` | Required durable intent/outcome unavailable; withhold release |
 | `signature_failed` | Native signing or verification failed; no release |
 | `request_conflict` | Retry identifier reused for a different semantic request; no new effect |
+| `busy` | A different operation is active or awaiting reconciliation; no new build/sign |
 | `outcome_uncertain` | Signature may exist in private staging; no release or automatic blind re-sign |
 
 These codes are proposals for client agreement, not promises about an existing executable.
@@ -87,6 +94,8 @@ These codes are proposals for client agreement, not promises about an existing e
 Installed trusted policy selects the repository URL/default branch, product pairing, admitted owner key,
 independent review evidence adapter, required checks, build recipe, target, signing certificate pin and
 entitlements. The caller selects none of these. Policy and evidence receipts have explicit identities.
+Owner-key admission is repository-scoped: an automation key admitted for another repository cannot qualify a
+client release here. An unrelated signers file or repository's own declaration cannot widen the trusted key set.
 
 Resolve the current canonical default branch from the configured authority and verify that the exact requested
 commit is landed there. Verify the commit's cryptographic signature against the configured owner key and obtain
@@ -122,7 +131,7 @@ The builder emits a bounded regular artifact and receipt binding product, reposi
 target, unsigned SHA-256 and exact byte size. The signer opens the input without following links, creates its
 own private immutable snapshot, and independently verifies size/hash and receipt. It refuses links, replacement,
 truncation, mutation or mismatch. The builder cannot alter the snapshot or trusted signing policy. The unsigned
-artifact must reproduce byte for byte in an independent rebuild under the same recorded deterministic inputs;
+artifact must reproduce byte for byte in two independent clean workspaces under the same recorded deterministic inputs;
 a mismatch refuses signing. Recipes must bind version, date, VCS and other build inputs instead of inheriting
 ambient values. The exact pinned recipe and independent rebuild procedure remain to be agreed before building.
 
@@ -150,9 +159,11 @@ repository and commit. Reuse for different inputs refuses. A matching retry retu
 state/result; policy and authority changes must never be hidden by retry. Stored policy identity and retry
 freshness behavior remain to be specified before implementation.
 
-Concurrent duplicates must not start independent signing operations. An interrupted operation with an intent
+Only one signing operation may be active. A matching retry inspects/returns its persisted state; a different
+request receives `busy` without starting a new build/sign or an implicit queue. An interrupted operation with an intent
 and no durable outcome remains uncertain until recovery reconciles private staging and verification evidence.
-It must neither release nor blindly sign again. Recovery records append to the audit instead of rewriting it.
+It retains the active-operation gate and must neither release nor blindly sign again. Recovery records append to
+the audit instead of rewriting it.
 An uncertain result is not a claim that no signature was created. Audit retention must cover the retry horizon.
 
 ## Acceptance controls
@@ -163,14 +174,15 @@ Every selected test lane runs and reports even if an earlier lane fails.
 
 | Surface | Valid control | Forbidden case and observable invariant |
 | --- | --- | --- |
-| Envelope | Both clients' complete requests | Binary/path/command injection, duplicate/unknown/oversize fields; no build/sign |
+| Envelope | Current client's complete request; broker compatibility retained for later integration | Binary/path/command injection, duplicate/unknown/oversize fields; no build/sign |
+| IPC | Configured kernel peer UID on both endpoints | Forged JSON UID or wrong kernel UID refuses before private-key use |
 | Admission | First confirmed secret-tool admission; later qualified release | Missing admission/unknown identifier; no build/sign. Later release has no presence prompt |
-| Authority | Exact owner-signed independently reviewed checked landed commit | Wrong signer, unlanded, unreviewed, wrong-head review, missing/unknown checks; no sign |
+| Authority | Exact owner-signed independently reviewed checked landed commit | Wrong signer or key admitted only for another repo, unlanded, unreviewed, wrong-head review, missing/unknown checks; no sign |
 | Builder | Real trusted exact-source build | Signer builds or builder reaches signing secrets; intended isolation refusal, no release |
 | Snapshot | Matching immutable artifact/receipt and independent unsigned rebuild | Symlink, substitution, truncation, hash or reproducibility mismatch; no sign |
 | Signature | Pinned P-256 identity and native verification | Ad-hoc/wrong identity/DR mismatch; no release |
 | Audit | Durable intent then signature then durable outcome | Missing intent prevents sign; failed outcome withholds artifact without claiming no signature |
-| Recovery | Same completed request returns its result | Changed-input retry conflicts; interrupted/parallel retry cannot duplicate signing or release uncertain output |
+| Recovery | Same completed request returns its result; pending retry returns its state | Changed-input retry conflicts; different active-operation request is busy; interrupted retry cannot duplicate signing or release uncertain output |
 
 Instrument controls must demonstrate a known forbidden effect is detected for the intended reason. Source
 fixtures prove only the paths they exercise; they do not establish host account isolation or deployment success.
