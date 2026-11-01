@@ -27,6 +27,11 @@ product/repository identity and admitted policy; build and signing receipts bind
 The admission confirmation mechanism and policy-change/revocation behavior require custody agreement before
 implementation. The caller cannot declare a tool admitted or non-secret-bearing.
 
+The first Curator core candidate is classified as secret-bearing: its source already resolves Git credentials,
+accepts login tokens and supplies registry authorization. This classification does not assert that a particular
+installation contains a secret or that its first admission has occurred. The separate launcher remains a later
+artifact. The [first Curator build proposal](curator-build-v1.md) records the source and recipe boundary.
+
 ## Independent service boundary
 
 The signer is a separately movable Go module with its own README and shipped skill when executable tooling
@@ -105,14 +110,19 @@ commit is landed there. Verify the commit's cryptographic signature against the 
 actual independent acceptance and required successful checks for that exact candidate. Missing, unknown, stale,
 wrong-head or unavailable evidence refuses. Caller assertions, tags, commit trailers and a producer's own
 review comment cannot establish independent acceptance. Provider records must match the actual delivery
-mechanisms used by both clients; no approval-only adapter is assumed.
+mechanism; no approval-only adapter is assumed.
 
 A legitimate delivery form can record an independently received exact-head verdict in a GitHub COMMENT review
 when the publishing account cannot approve its own PR. The service must also verify the independent verdict's
-provenance and exact candidate binding; the COMMENT alone is insufficient. A successfully read, empty inventory
+provenance and exact candidate binding; the COMMENT alone is insufficient. For the first adapter, an eligible
+COMMENT explicitly identifies the independent verdict's room ID and event ID. The adapter fetches that exact
+event and checks its authenticated sender, exact source head, PR and explicit acceptance without unresolved
+blocking findings. Historical comments without that reference do not pass this forward requirement.
+The [authority adapter contract](authority-v1.md) defines the separate credential principal, protected projection
+and present trust limits. A successfully read, empty inventory
 of checks under an independently established no-required-check policy is distinct from green CI. Unknown rules,
-unavailable inventory or missing required checks cannot be interpreted as that empty case. Review-receipt format
-and verification remain to be agreed; this contract introduces no shared review framework dependency.
+unavailable inventory or missing required checks cannot be interpreted as that empty case. Exact parsing must
+be qualified against the actual forward-form receipt before freeze; no shared review framework is required.
 
 Recheck authority and admission immediately before build and before sign, with explicit freshness and revocation
 rules. The accepted adapter must define how an exact reviewed signed head remains attributable after a permitted
@@ -122,7 +132,10 @@ nonrewriting landing. Freeze those evidence forms with clients before writing th
 
 The builder is a distinct unprivileged account with no signing key or signer-home access. It uses a clean exact
 commit, a trusted pinned recipe/toolchain, bounded resources, and a sanitized environment without inherited
-authentication. Go recipes use `GOTOOLCHAIN=local`, `-mod=readonly`, `-trimpath` and verified dependency sums;
+authentication. Source/dependency acquisition with any provider credentials occurs in the separate authority
+adapter, which supplies verified bounded source data rather than executable build output. The builder receives
+no token, credential helper, SSH agent or credential-bearing URL and runs offline with approved dependency inputs.
+Go recipes use `GOTOOLCHAIN=local`, `-mod=readonly`, `-trimpath` and verified dependency sums;
 they do not run caller commands or `go generate`. Exact client architectures, dependency/network policy and
 deterministic build inputs remain to be confirmed.
 

@@ -6,15 +6,19 @@ socket, directory or policy described here is asserted to exist or authorized fo
 ## Principals and data custody
 
 The signer runs under its configured signing principal and binds its own sockets. A separately launched,
-unprivileged builder process runs under the configured distinct keyless principal. A reviewed service launcher
+unprivileged builder process runs under the configured distinct keyless principal. A separate evidence-adapter
+process runs under its own configured unprivileged principal, distinct from signer, builder and requesting client.
+It owns provider-read credentials and returns authenticated authority projections and verified source inputs;
+its [authority contract](authority-v1.md) preserves the signer's credential-free boundary. These processes belong
+to the signer's one module and communicate through external role interfaces. A reviewed service launcher
 can start each process as its own UID; the signer does not switch UID, execute builds or provide a root command
 runner. Principal UIDs/GIDs and narrowly enumerated socket-group memberships are mandatory trusted deployment
 inputs. Unknown host state is neither absence nor permission to create or repurpose an account.
 
-Proposed paths are `/var/run/relux-signer/{requests,builder}.sock`, protected policy/admission records under
+Proposed paths are `/var/run/relux-signer/{requests,builder,evidence}.sock`, protected policy/admission records under
 `/Library/Application Support/relux/swarma-signer`, signer-private journal/snapshots under `/var/db/relux-signer`,
 and builder-private workspaces under `/var/tmp/relux-signer-build`. The runtime socket directory is signer-owned
-0755; sockets are signer-owned 0660 with distinct configured client/build groups. Policy records are root-owned
+0755; sockets are signer-owned 0660 with distinct configured client/build/evidence groups. Policy records are root-owned
 0644; signer state and builder workspace directories are each 0700 under their separate principals.
 
 Both endpoints verify kernel peer UIDs for the configured role. Group access, socket possession and JSON UID
@@ -22,12 +26,33 @@ claims do not authorize work. Same-UID executable identity is not attested by pe
 exclude signer secrets from build groups, environment, mounts and descendants. Exact Darwin peer semantics and
 filesystem isolation require target qualification in safe fixtures.
 
+## Source acquisition before the offline build
+
+The evidence adapter uses only the configured repository and dependency authority routes. The request cannot
+add a repository URL, helper, filter, hook, submodule or replacement outside that trusted policy. Acquisition
+never runs source commands, build scripts or module tools with the adapter's credentials. Actual provider access
+and repository/dependency closure must be qualified; a read-only code path is not proof of a read-only token.
+
+The adapter supplies bounded content-addressed source and dependency data with an acquisition receipt binding
+the canonical repository, exact commit and tree, bundle hashes/sizes, module sums and policy. It does not supply
+a compiled artifact. The signer authenticates its configured peer, copies the bounded data into its own custody
+and binds their digests to the operation before handing the same verified bytes to the builder. A bundle that
+cannot establish the requested object/tree or dependency closure refuses; authentication alone is insufficient.
+Extraction must reject traversal, escaping links and writes outside the private workspace. Source-data framing,
+capacity and the exact dependency manifest remain freeze inputs; none is an unbounded upload allowance.
+
+The builder verifies those inputs, creates two clean workspaces from them and has no network or credential
+access. Dependencies are preverified read-only inputs to both builds; the compiler cannot fetch missing modules
+or a toolchain. Failure to establish the isolated offline environment refuses before compilation. No secret
+is copied into an environment merely to make a private source build work.
+
 ## Builder job and byte-stream result
 
 The builder connects to the signer-created builder endpoint. Its bounded versioned registration binds the
 configured recipe-policy digest. The signer dispatches one finite job only for the accepted active operation:
 operation ID, service-generated nonce, configured repository alias, exact source commit, trusted recipe identity
-and digest, toolchain/target identities, and installed resource limits. No client-selected URL, shell command,
+and digest, verified source/dependency input digests, toolchain/target identities, and installed resource limits.
+No client-selected URL, shell command,
 environment, output path or binary is accepted. The builder independently selects that installed recipe and
 refuses a policy/job mismatch. Registration and idle reconnection are bounded; they do not create a signing job.
 
@@ -58,7 +83,7 @@ Proposed trusted limits for first-client agreement are:
 
 | Boundary | Proposed bound |
 | --- | ---: |
-| Client connections / builder connections | 4 / 1 |
+| Client / builder / evidence-adapter connections | 4 / 1 / 1 |
 | Header / JSON body read | 2s / 2s |
 | JSON request / result size | 4096 bytes / 16384 bytes |
 | JSON response write | 5s |

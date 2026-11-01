@@ -13,7 +13,8 @@ bound to the build, signing and audit receipts.
 The signing identity is an ECDSA P-256 certificate held by a dedicated service user. The developer keys in the login
 keychain are not used.
 
-First clients: Curator, which will read the Claude setup token from the Keychain, and the network proxy's KEK broker.
+The first client is Curator core, which already resolves credentials and uses authorization tokens. Its separate
+launcher follows later. The network proxy's KEK broker is the second client after Curator rollout and dogfooding.
 
 Owner, 2026-11-01: «так ты говоришь нет подписи у куратора ну так давай подписывать».
 
@@ -21,6 +22,8 @@ Status: preparation.
 
 The [proposed version 1 contract](docs/contract-v1.md) defines the source, builder, signer and client boundaries.
 Client parameters and host custody are awaiting confirmation; this document does not describe an installed service.
+The [authority adapter](docs/authority-v1.md) keeps evidence credentials outside the signer and builder; the
+[first Curator build proposal](docs/curator-build-v1.md) separates known source facts from unqualified recipe inputs.
 
 ## Tools
 

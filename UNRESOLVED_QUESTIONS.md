@@ -4,12 +4,13 @@
 
 | Question | Required source | Effect while open |
 | --- | --- | --- |
-| Curator repo/default branch, exact source release, identifier, target, entrypoint, toolchain/recipe digest, dependency policy and entitlements | Curator maintainer | No invented Curator allowlist or recipe |
+| Curator exact qualified source release, signing identifier, complete toolchain/recipe and source/dependency manifests, entitlements and runtime compatibility | Curator maintainer and service maintainer | Repo/branch/entrypoint/target and secret-bearing classification are known; one commit-labelled recipe is proposed, not qualified |
 | Later broker release candidate, native deterministic recipe, toolchain/SDK digests, dependency policy and entitlements | Broker source maintainer and service maintainer | Repo/identifier/entrypoint, required CGO/native frameworks and constant-version constraints are known; broker integration follows Curator rollout |
-| Exact signed/reviewed/checked/landed receipt verification, freshness and revocation | Both client delivery owners and service maintainer | Legitimate COMMENT plus independent-verdict form is known; verifiable mapping remains to be agreed |
-| Request/result JSON bounds and grammars, transport authorization, artifact transfer, timeout and retry horizon | Both client maintainers and service maintainer | Version 1 envelope remains proposed |
+| Actual forward-form COMMENT/verdict grammar and passing witness; exact check policy, freshness and revocation qualification | First-client delivery owner and service maintainer | Explicit room/event citation and independent authenticated sender mapping are selected; historical uncited COMMENT cannot pass the new rule |
+| Request/result JSON bounds and grammars, transport authorization, artifact transfer, timeout and retry horizon | First-client maintainer and service maintainer; broker compatibility retained for later integration | Version 1 envelope remains proposed; second-client qualification does not block the first slice |
 | First-admission confirmation record and identity binding; policy changes, revocation and re-admission semantics | Signing custodian and service maintainer under the owner decision | No release-specific approval requirement added |
 | Builder account/isolation, source access, immutable IPC custody, signer snapshot ownership and reproducibility envelope | macOS host custodian and actual Curator/broker build owners | No host writes or assertion that UID separation alone protects all host secrets |
+| Separate evidence principal's actual provider access, own signed binary/DR, Keychain custody and bounded source/dependency transfer | Evidence and signing custodians with service maintainer | Selected credential placement is not an account, enforced token scope or bootstrap exemption |
 | Durable audit primitive, checkpoint custodian, retention, recovery and concurrent/retried operation semantics | Signing custodian and service/client maintainers | No artifact release without durable outcome; uncertainty stays explicit |
 
 No service, user, key, ACL, Keychain, sudo, daemon or private broker operation is authorized by this proposal.
