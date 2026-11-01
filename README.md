@@ -12,3 +12,9 @@ Owner decision, 2026-11-01: «давай сделаем проект сварм�
 ## Subprojects
 
 - [signer](signer/README.md): release signer. Builds a reviewed commit of an allowlisted tool and signs the result.
+
+## Tools
+
+Git manages source history. Run `git diff --check` to check a patch for whitespace errors. Temporary evidence and
+logs go in the ignored `.temp/` directory. Each service documents its own build, test and run tools in its README;
+there is no repository-wide Go module or service installation command yet.
