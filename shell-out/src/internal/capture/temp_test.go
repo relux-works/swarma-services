@@ -113,6 +113,86 @@ func TestProjectTempAdmission(t *testing.T) {
 	}
 }
 
+// Unlike an escaping symlink, this relative target is reachable through os.Root.
+// TestProjectTempAdmission/0755 is the nearby real-directory positive control.
+// Check discovery and initialization directly: Git refuses paths beneath a
+// symlink before Run reaches initialization, which would mask a missing guard.
+func TestProjectTempRelativeSymlinkRefusal(t *testing.T) {
+	for _, phase := range []string{"discovery", "initialize"} {
+		t.Run(phase, func(t *testing.T) {
+			p := project(t)
+			// Directory admission must not change even pre-ignored exclusions.
+			if e := os.WriteFile(filepath.Join(p, ".gitignore"), []byte("/.temp/\n"), 0600); e != nil {
+				t.Fatal(e)
+			}
+			exclude := filepath.Join(p, ".git", "info", "exclude")
+			before, e := os.ReadFile(exclude)
+			if e != nil {
+				t.Fatal(e)
+			}
+			var s *Store
+			if phase == "initialize" {
+				s, e = OpenStore(p)
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer s.Close()
+			}
+			target := filepath.Join(p, "temp-target")
+			if e = os.Mkdir(target, 0755); e != nil {
+				t.Fatal(e)
+			}
+			if e = os.Chmod(target, 0755); e != nil {
+				t.Fatal(e)
+			}
+			requireMode(t, target, 0755)
+			st, e := os.Stat(target)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = checkProjectTemp(st); e != nil {
+				t.Fatal("relative target must otherwise qualify for admission", e)
+			}
+			temp := filepath.Join(p, ".temp")
+			if e = os.Symlink("temp-target", temp); e != nil {
+				t.Fatal(e)
+			}
+			anchor, e := os.OpenRoot(p)
+			if e != nil {
+				t.Fatal(e)
+			}
+			resolved, e := anchor.Stat(".temp")
+			anchor.Close()
+			if e != nil || !os.SameFile(st, resolved) {
+				t.Fatal("relative symlink must resolve to its target within the anchor", e)
+			}
+			if phase == "discovery" {
+				s, e = OpenStore(p)
+				if e == nil {
+					defer s.Close()
+				}
+			} else {
+				e = s.initialize()
+			}
+			if e == nil || !strings.Contains(e.Error(), `unsafe directory component ".temp"`) {
+				t.Errorf("expected explicit relative-symlink refusal, got error=%v", e)
+			}
+			items, e := os.ReadDir(target)
+			if e != nil || len(items) != 0 {
+				t.Error("refusal created custody in relative target", e)
+			}
+			after, e := os.ReadFile(exclude)
+			if e != nil || !bytes.Equal(before, after) {
+				t.Error("refusal changed exclusions", e)
+			}
+			if link, e := os.Readlink(temp); e != nil || link != "temp-target" {
+				t.Error("relative symlink changed", link, e)
+			}
+			requireMode(t, target, 0755)
+		})
+	}
+}
+
 func TestProjectTempWritableRefusal(t *testing.T) {
 	for _, mode := range []fs.FileMode{0770, 0777, 0702} {
 		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
