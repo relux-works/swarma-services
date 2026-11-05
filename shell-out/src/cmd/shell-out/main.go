@@ -142,12 +142,16 @@ func runPresented(args []string, stdin io.Reader, stdout, stderr io.Writer, sign
 	if e != nil {
 		fmt.Fprintln(stderr, "capture:", e)
 	}
-	// Every started attempt ends with a machine-readable ref, separate from output.
+	// Attempt one complete frame packet. Enqueue/flush failure is not delivery;
+	// it must not mask the already-retained execution outcome.
+	frameFailed := false
 	if r.Ref != "" {
-		fmt.Fprint(stderr, "\n\x1e[shell-out result] ")
-		if je := json.NewEncoder(stderr).Encode(r); je != nil {
-			return 125
+		b, je := json.Marshal(r)
+		if je == nil {
+			packet := append([]byte("\n\x1e[shell-out result] "), b...)
+			_, je = stderr.Write(append(packet, '\n'))
 		}
+		frameFailed = je != nil
 	}
 	if r.Ref == "" || r.CommandStatus == "spawn_failed" {
 		return 125
@@ -158,7 +162,7 @@ func runPresented(args []string, stdin io.Reader, stdout, stderr io.Writer, sign
 	if r.ExitCode != 0 {
 		return r.ExitCode
 	}
-	if e != nil || r.CaptureStatus != "complete" || r.CaptureError != "" {
+	if e != nil || frameFailed || r.CaptureStatus != "complete" || r.CaptureError != "" {
 		return 125
 	}
 	return 0

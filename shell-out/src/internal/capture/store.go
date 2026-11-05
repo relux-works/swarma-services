@@ -2,6 +2,7 @@
 package capture
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -101,9 +102,27 @@ func walkAbsolute(path string, create bool) (*os.Root, error) {
 	return r, nil
 }
 
-func git(cwd string, args ...string) (string, error) {
-	c := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+const gitTimeout = 2 * time.Second
+
+// Git can block opening repository-controlled FIFOs, including info/exclude.
+// Bound every invocation, including its pipe drain, and cancel its process group.
+func gitOutput(cwd string, stdin io.Reader, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
+	c.Stdin = stdin
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
+	c.WaitDelay = 150 * time.Millisecond
 	b, e := c.Output()
+	if ctx.Err() != nil {
+		return b, fmt.Errorf("git deadline: %w", ctx.Err())
+	}
+	return b, e
+}
+
+func git(cwd string, args ...string) (string, error) {
+	b, e := gitOutput(cwd, nil, args...)
 	return strings.TrimSpace(string(b)), e
 }
 
@@ -232,9 +251,7 @@ func (s *Store) excludeRoot() (*os.Root, error) {
 // Per-directory .gitignore negations outrank info/exclude; refuse them before
 // any write. Git's -z framing preserves spaces/newlines in source filenames.
 func (s *Store) canIgnore(paths []string) (bool, error) {
-	c := exec.Command("git", "-C", s.project, "check-ignore", "-v", "-n", "-z", "--stdin")
-	c.Stdin = strings.NewReader(strings.Join(paths, "\x00") + "\x00")
-	b, e := c.Output()
+	b, e := gitOutput(s.project, strings.NewReader(strings.Join(paths, "\x00")+"\x00"), "check-ignore", "-v", "-n", "-z", "--stdin")
 	var ee *exec.ExitError
 	if e != nil && (!errors.As(e, &ee) || ee.ExitCode() != 1) {
 		return false, e
@@ -362,7 +379,9 @@ type call struct {
 	record         Record
 	project        string
 	published      bool
-	nextTemp       string
+	// Live runs reuse this exact preflighted name under the held directory.
+	// Purge has no preflighted name and validates a fresh one before saving.
+	tempName string
 }
 
 func (c *call) close() {
@@ -417,7 +436,7 @@ func (s *Store) create(session string, argv []string, hours float64) (*call, err
 	if e != nil {
 		return nil, e
 	}
-	c := &call{dir: dir, name: name, project: s.project, nextTemp: initialTemp}
+	c := &call{dir: dir, name: name, project: s.project, tempName: initialTemp}
 	created := []string{}
 	ok := false
 	defer func() {
@@ -457,8 +476,7 @@ func (s *Store) create(session string, argv []string, hours float64) (*call, err
 // save never truncates published JSON. The stable .lock inode protects the
 // record across atomic replacements; old records without .lock remain readable.
 func (c *call) save() error {
-	temp := c.nextTemp
-	c.nextTemp = ""
+	temp := c.tempName
 	var e error
 	if temp == "" {
 		id, re := randomID()
@@ -466,10 +484,10 @@ func (c *call) save() error {
 			return re
 		}
 		temp = c.name + ".json.tmp-" + id
-	}
-	if c.project != "" {
-		if e = ignoredDestination(c.project, filepath.Join(filepath.Dir(c.record.Stdout), temp)); e != nil {
-			return e
+		if c.project != "" {
+			if e = ignoredDestination(c.project, filepath.Join(filepath.Dir(c.record.Stdout), temp)); e != nil {
+				return e
+			}
 		}
 	}
 	f, e := exclusive(c.dir, temp)
