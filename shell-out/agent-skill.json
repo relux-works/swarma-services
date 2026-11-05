@@ -1,0 +1,15 @@
+{
+  "schema_version": 8,
+  "build_roots": ["src"],
+  "commands": {
+    "shell-out": {"type": "build", "driver": "go-v1", "source_dir": "src/cmd/shell-out"}
+  },
+  "capabilities": {
+    "network": "none",
+    "filesystem": "repo",
+    "exec": ["git", "sh", "bash", "zsh", "fish"],
+    "secrets": "none",
+    "env_read": ["PATH", "HOME", "XDG_CACHE_HOME"],
+    "prompt_scope": "Manual capture of an independently authorized original argv. Executes arbitrary user-selected child programs, forwards caller environment and stdin, and retains potentially sensitive output in ignored project storage or the user cache. Static exec names describe fixed Git and common shell dependencies, not an allowlist or an exhaustive dynamic dispatch boundary. No automatic runtime interception or permission enforcement."
+  }
+}

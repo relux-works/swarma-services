@@ -12,3 +12,5 @@ Owner decision, 2026-11-01: «давай сделаем проект сварм�
 ## Subprojects
 
 - [signer](signer/README.md): release signer. Builds a reviewed commit of an allowlisted tool and signs the result.
+
+- [shell-out](shell-out/README.md): manual private shell output capture, bounded previews and stable references.
