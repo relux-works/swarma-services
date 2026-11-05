@@ -57,6 +57,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, signaled func
 	return code
 }
 func runPresented(args []string, stdin io.Reader, stdout, stderr io.Writer, signaled func(syscall.Signal)) int {
+	return runPresentedWithTimeout(args, stdin, stdout, stderr, signaled, context.WithTimeout)
+}
+
+func runPresentedWithTimeout(args []string, stdin io.Reader, stdout, stderr io.Writer, signaled func(syscall.Signal), withTimeout func(context.Context, time.Duration) (context.Context, context.CancelFunc)) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: shell-out run|lookup|purge [options] -- argv...")
 		return 125
@@ -137,7 +141,7 @@ func runPresented(args []string, stdin io.Reader, stdout, stderr io.Writer, sign
 	ctx := context.Background()
 	if *timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		ctx, cancel = withTimeout(ctx, *timeout)
 		defer cancel()
 	}
 	signals := make(chan os.Signal, 4)

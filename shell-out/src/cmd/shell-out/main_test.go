@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -71,17 +73,6 @@ func TestCLISpawnFailureAndPartialExitContract(t *testing.T) {
 		}
 	}
 }
-func TestCLITimeout(t *testing.T) {
-	p := fixture(t)
-	var out, errout bytes.Buffer
-	start := time.Now()
-	code := run([]string{"run", "--cwd", p, "--timeout", "100ms", "--", "/bin/sh", "-c", "printf before; sleep 10"}, nil, &out, &errout, nil)
-	r := result(t, errout.Bytes())
-	if code != 143 || r.CommandStatus != "cancelled" || time.Since(start) > 3*time.Second {
-		t.Fatalf("code=%d %+v", code, r)
-	}
-}
-
 func TestCLITimeoutBeforeSpawn(t *testing.T) {
 	// A deadline starts before spawn. Test that real flag/expiry contract
 	// separately from cancellation of a child whose readiness is observable.
@@ -96,7 +87,7 @@ func TestCLITimeoutBeforeSpawn(t *testing.T) {
 			code := run(args, nil, &out, &errout, nil)
 			r := result(t, errout.Bytes())
 			if timeout == "1ns" {
-				if code != 125 || r.CommandStatus != "spawn_failed" || r.Out.Saved != 0 || !strings.Contains(errout.String(), "context deadline exceeded") {
+				if code != 125 || r.CommandStatus != "spawn_failed" || r.Out.Saved != 0 || r.Err.Saved != 0 || out.Len() != 0 || r.Signal != 0 || !strings.Contains(errout.String(), "context deadline exceeded") {
 					t.Fatalf("expired before spawn: code=%d record=%+v stderr=%q", code, r, errout.String())
 				}
 				if _, err := os.Stat(filepath.Join(child, "started")); !os.IsNotExist(err) {
@@ -104,6 +95,9 @@ func TestCLITimeoutBeforeSpawn(t *testing.T) {
 				}
 			} else if code != 0 || r.CommandStatus != "exited" || out.String() != "before" || !r.Out.Complete || r.Out.Saved != 6 {
 				t.Fatalf("disabled timeout control: code=%d record=%+v out=%q", code, r, out.String())
+			}
+			if timeout == "0" {
+				assertCLIChildReaped(t, child)
 			}
 		})
 	}
@@ -162,18 +156,7 @@ func TestCLICancellationAfterChildReady(t *testing.T) {
 	if waitErr == nil || !status.Signaled() || status.Signal() != syscall.SIGTERM || r.CommandStatus != "cancelled" || r.ExitCode != 143 || r.Signal != int(syscall.SIGTERM) || r.CaptureStatus != "complete" || !r.Out.Complete || r.Out.Saved != 6 || out.String() != "before" || time.Since(start) > 3*time.Second {
 		t.Fatalf("ready-child cancellation: wait=%v record=%+v out=%q", waitErr, r, out.String())
 	}
-	pidBytes, err := os.ReadFile(filepath.Join(child, "started"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(string(pidBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
-		lifecycletest.Kill(child)
-		t.Fatalf("ready child not reaped: %v", err)
-	}
+	assertCLIChildReaped(t, child)
 }
 func TestCLIValidationDoesNotSpawn(t *testing.T) {
 	p := fixture(t)
@@ -336,5 +319,275 @@ func TestReviewUndrainedCLIStderrStillFinalizes(t *testing.T) {
 	}
 	if r.CommandStatus != "cancelled" || r.CaptureError == "" {
 		t.Error("cancellation/presentation failure not persisted")
+	}
+}
+
+// This constructor controls the TEST deadline start. It proves parsed duration
+// wiring and real deadline-driven cancellation after readiness, not that a
+// production 100ms deadline always allows enough time to spawn a child.
+func TestCLITimeoutAfterReadyTestControlledDeadline(t *testing.T) {
+	p, child := fixture(t), t.TempDir()
+	constructed, done := make(chan struct{}), make(chan struct{})
+	var ctx context.Context
+	var cancel context.CancelFunc
+	var duration time.Duration
+	calls := 0
+	withTimeout := func(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+		calls++
+		duration = d
+		if parent != context.Background() {
+			t.Error("timeout parent changed")
+		}
+		ctx, cancel = context.WithCancel(parent)
+		close(constructed)
+		return ctx, cancel
+	}
+	var out, errout bytes.Buffer
+	var code int
+	var signal syscall.Signal
+	args := append([]string{"run", "--cwd", p, "--timeout", "100ms", "--"}, lifecycletest.Argv(t, child)...)
+	go func() {
+		code = runPresentedWithTimeout(args, nil, &out, &errout, func(s syscall.Signal) { signal = s }, withTimeout)
+		close(done)
+	}()
+	defer func() {
+		lifecycletest.Kill(child)
+		// Read constructor state only after its publication (also on setup failure).
+		select {
+		case <-constructed:
+			cancel()
+		default:
+		}
+		lifecycletest.Await(t, done, "timeout fixture cleanup")
+	}()
+	lifecycletest.Await(t, constructed, "timeout constructor")
+	if calls != 1 || duration != 100*time.Millisecond {
+		t.Fatalf("timeout wiring: calls=%d duration=%s; want exactly one 100ms", calls, duration)
+	}
+	spawnLimit := time.Now().Add(lifecycletest.Limit)
+	for {
+		if _, err := os.Stat(filepath.Join(child, "started")); err == nil {
+			break
+		}
+		select {
+		case <-done:
+			t.Fatalf("real child PID readiness missing: CLI returned code=%d before spawn", code)
+		default:
+		}
+		if time.Now().After(spawnLimit) {
+			t.Fatal("real child did not publish PID within 5s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	lifecycletest.Release(t, child, "release")
+	lifecycletest.WaitFile(t, child, "ready")
+	// Observe the actual retained file, independently of presentation and the
+	// child's ready marker. Setup/failure cleanup keep their separate 5s bounds.
+	setupLimit := time.Now().Add(lifecycletest.Limit)
+	retained := false
+	for time.Now().Before(setupLimit) {
+		files, err := filepath.Glob(filepath.Join(p, ".temp", "shell-out", "manual", "*.out.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) == 1 {
+			b, err := os.ReadFile(files[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) == "before" {
+				retained = true
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !retained {
+		t.Fatal("real child output was not retained before deadline")
+	}
+	select {
+	case <-done:
+		t.Fatal("child exited before test-controlled deadline")
+	default:
+	}
+	start := time.Now()
+	deadline, stop := context.WithTimeout(context.Background(), duration)
+	defer stop()
+	<-deadline.Done()
+	if !errors.Is(deadline.Err(), context.DeadlineExceeded) || ctx.Err() != nil {
+		t.Fatal("deadline did not independently expire before cancellation")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3*time.Second - time.Since(start)):
+		t.Fatal("deadline-driven ready-child termination exceeded 3s")
+	}
+	r := result(t, errout.Bytes())
+	b, err := os.ReadFile(r.Stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eb, err := os.ReadFile(r.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || code != 143 || signal != syscall.SIGTERM || r.CommandStatus != "cancelled" || r.ExitCode != 143 || r.Signal != 15 || r.CaptureStatus != "complete" || r.CaptureError != "" || !r.Out.Complete || !r.Err.Complete || r.Out.Saved != 6 || r.Err.Saved != 0 || string(b) != "before" || len(eb) != 0 || out.String() != "before" || time.Since(start) > 3*time.Second {
+		t.Fatalf("TEST-CONTROLLED deadline: calls=%d code=%d signal=%v record=%+v saved=%q stderr=%q out=%q", calls, code, signal, r, b, eb, out.String())
+	}
+	assertCLIChildReaped(t, child)
+	t.Logf("TEST-CONTROLLED genuine deadline=%s, termination elapsed=%s", duration, time.Since(start))
+}
+
+func assertCLIChildReaped(t *testing.T, child string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(child, "started"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(b))
+	if err != nil || pid <= 1 {
+		t.Fatalf("invalid real child PID %q: %v", b, err)
+	}
+	if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+		lifecycletest.Kill(child)
+		t.Fatalf("child PID %d not reaped: %v", pid, err)
+	}
+	t.Logf("real child PID=%d reaped (ESRCH)", pid)
+}
+
+func TestCLITimeoutConstructorExcludedPaths(t *testing.T) {
+	p, child := fixture(t), t.TempDir()
+	lifecycletest.Release(t, child, "release")
+	lifecycletest.Release(t, child, "finish")
+	for _, tc := range []struct {
+		name string
+		args []string
+		code int
+	}{
+		{"disabled", append([]string{"run", "--cwd", p, "--timeout", "0", "--"}, lifecycletest.Argv(t, child)...), 0},
+		{"invalid", []string{"run", "--cwd", p, "--timeout", "invalid", "--", "/bin/true"}, 125},
+		{"negative", []string{"run", "--cwd", p, "--timeout", "-1s", "--", "/bin/true"}, 125},
+		{"lookup", []string{"lookup", "--cwd", p, "--timeout", "100ms", "--", "missing"}, 125},
+		{"purge", []string{"purge", "--cwd", p, "--timeout", "100ms"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			constructor := func(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+				calls++
+				return context.WithTimeout(parent, d)
+			}
+			var out, errout bytes.Buffer
+			code := runPresentedWithTimeout(tc.args, nil, &out, &errout, nil, constructor)
+			if calls != 0 || code != tc.code {
+				t.Fatalf("excluded constructor path: calls=%d code=%d want=%d stderr=%q", calls, code, tc.code, errout.String())
+			}
+			if tc.name == "disabled" {
+				r := result(t, errout.Bytes())
+				if r.CommandStatus != "exited" || out.String() != "before" || r.Out.Saved != 6 || !r.Out.Complete {
+					t.Fatalf("disabled positive control: record=%+v out=%q", r, out.String())
+				}
+				assertCLIChildReaped(t, child)
+			}
+		})
+	}
+}
+
+// TestMain also provides an owned, finite Git preflight gate. Only the test
+// binary named git with the explicit test environment enters this branch;
+// after release it execs the installed Git with the original arguments.
+func TestMain(m *testing.M) {
+	if root := os.Getenv("SHELL_OUT_TEST_GIT_GATE"); root != "" && filepath.Base(os.Args[0]) == "git" {
+		for _, arg := range os.Args[1:] {
+			if arg != "check-ignore" {
+				continue
+			}
+			if err := os.WriteFile(filepath.Join(root, "git-waiting"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+				os.Exit(97)
+			}
+			limit := time.Now().Add(lifecycletest.Limit)
+			for {
+				if _, err := os.Stat(filepath.Join(root, "git-continue")); err == nil {
+					break
+				}
+				if time.Now().After(limit) {
+					os.Exit(98)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			break
+		}
+		if err := syscall.Exec(os.Getenv("SHELL_OUT_TEST_REAL_GIT"), os.Args, os.Environ()); err != nil {
+			os.Exit(99)
+		}
+	}
+	os.Exit(m.Run())
+}
+
+// Pause preflight after the ordinary wrapper's timeout construction, before
+// child startup. No constructor is injected: both arms use run -> runPresented.
+func TestCLIOrdinaryDeadlineDuringPreflight(t *testing.T) {
+	for _, timeout := range []string{"100ms", "0"} {
+		t.Run(timeout, func(t *testing.T) {
+			p, child, gate, bin := fixture(t), t.TempDir(), t.TempDir(), t.TempDir()
+			lifecycletest.Release(t, child, "release")
+			lifecycletest.Release(t, child, "finish")
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			exe, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Symlink(exe, filepath.Join(bin, "git")); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("SHELL_OUT_TEST_GIT_GATE", gate)
+			t.Setenv("SHELL_OUT_TEST_REAL_GIT", realGit)
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			var out, errout bytes.Buffer
+			var code int
+			args := append([]string{"run", "--cwd", p, "--timeout", timeout, "--"}, lifecycletest.Argv(t, child)...)
+			done := make(chan struct{})
+			go func() { code = run(args, nil, &out, &errout, nil); close(done) }()
+			defer func() {
+				lifecycletest.Release(t, gate, "git-continue")
+				lifecycletest.Kill(child)
+				lifecycletest.Await(t, done, "ordinary deadline fixture cleanup")
+			}()
+			lifecycletest.WaitFile(t, gate, "git-waiting")
+			pid, err := os.ReadFile(filepath.Join(gate, "git-waiting"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// This additional real 100ms deadline starts only after an actual
+			// preflight process announces itself. The production timer must
+			// already be running; child startup plays no role in this evidence.
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			<-ctx.Done()
+			cancel()
+			if _, err := os.Stat(filepath.Join(child, "started")); !os.IsNotExist(err) {
+				t.Fatalf("child spawned during held preflight: %v", err)
+			}
+			start := time.Now()
+			lifecycletest.Release(t, gate, "git-continue")
+			lifecycletest.Await(t, done, "ordinary deadline result")
+			r := result(t, errout.Bytes())
+			if timeout == "100ms" {
+				if code != 125 || r.CommandStatus != "spawn_failed" || !strings.Contains(errout.String(), "context deadline exceeded") || r.Out.Saved != 0 || r.Err.Saved != 0 || out.Len() != 0 {
+					t.Fatalf("ordinary 100ms deadline during preflight: code=%d record=%+v stderr=%q", code, r, errout.String())
+				}
+				if _, err := os.Stat(filepath.Join(child, "started")); !os.IsNotExist(err) {
+					t.Fatalf("ordinary expired deadline spawned child: %v", err)
+				}
+			} else {
+				if code != 0 || r.CommandStatus != "exited" || out.String() != "before" || r.Out.Saved != 6 || !r.Out.Complete {
+					t.Fatalf("ordinary disabled preflight control: code=%d record=%+v out=%q", code, r, out.String())
+				}
+				assertCLIChildReaped(t, child)
+			}
+			t.Logf("ordinary timeout=%s, preflight Git PID=%s held for genuine 100ms deadline, post-release=%s", timeout, pid, time.Since(start))
+		})
 	}
 }

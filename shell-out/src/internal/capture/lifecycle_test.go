@@ -166,6 +166,7 @@ func cancellationAfterProgress(t *testing.T, delayChild bool) {
 		lifecycletest.Kill(child)
 		t.Fatalf("ready child not reaped: %v", err)
 	}
+	t.Logf("real child PID=%d reaped (ESRCH), cancellation elapsed=%s", pid, time.Since(start))
 }
 
 func TestCancellationBeforeSpawnIsNotTermination(t *testing.T) {
