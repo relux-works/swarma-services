@@ -78,6 +78,18 @@ func descend(parent *os.Root, name string, create, private bool) (*os.Root, erro
 	return r, nil
 }
 
+// The project owns .temp; only shell-out and its descendants are private custody.
+// Never repair an existing parent's permissions or admit another owner's tree.
+func checkProjectTemp(st os.FileInfo) error {
+	if st.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) {
+		return errors.New("existing .temp must be owned by the effective user")
+	}
+	if st.Mode().Perm()&0022 != 0 {
+		return errors.New("existing .temp must not be group- or world-writable")
+	}
+	return nil
+}
+
 func absoluteRoot(path string) (*os.Root, error) { return walkAbsolute(path, false) }
 func walkAbsolute(path string, create bool) (*os.Root, error) {
 	path, e := filepath.Abs(path)
@@ -205,8 +217,8 @@ func OpenStore(cwd string) (*Store, error) {
 		if e != nil {
 			return nil, e
 		}
-		if st.Mode().Perm() != 0700 || st.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) {
-			return nil, errors.New("existing .temp must be owned and mode 0700")
+		if e = checkProjectTemp(st); e != nil {
+			return nil, e
 		}
 	}
 	s.root, e = descend(r, "shell-out", false, true)
@@ -285,8 +297,18 @@ func (s *Store) initialize() error {
 		if pe != nil {
 			return pe
 		}
-		r, e = descend(parent, ".temp", true, true)
+		r, e = descend(parent, ".temp", true, false)
 		parent.Close()
+		if e == nil {
+			st, se := r.Stat(".")
+			if se == nil {
+				se = checkProjectTemp(st)
+			}
+			if se != nil {
+				r.Close()
+				return se
+			}
+		}
 	} else {
 		r, e = walkAbsolute(base, true)
 	}

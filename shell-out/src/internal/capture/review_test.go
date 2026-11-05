@@ -103,8 +103,8 @@ func TestReviewRefusalDoesNotMutate(t *testing.T) {
 			case "metadata-temp-negation":
 				os.WriteFile(filepath.Join(p, ".gitignore"), []byte("!.temp/shell-out/test/*.json.tmp-[a-f0-9]*\n"), 0600)
 			case "mode":
-				os.Mkdir(filepath.Join(p, ".temp"), 0755)
-				os.Chmod(filepath.Join(p, ".temp"), 0755)
+				os.Mkdir(filepath.Join(p, ".temp"), 0770)
+				os.Chmod(filepath.Join(p, ".temp"), 0770)
 			}
 			for i := 0; i < 2; i++ {
 				s, e := OpenStore(p)
@@ -126,7 +126,7 @@ func TestReviewRefusalDoesNotMutate(t *testing.T) {
 			}
 			st, e := os.Stat(filepath.Join(p, ".temp"))
 			if kind == "mode" {
-				if e != nil || st.Mode().Perm() != 0755 {
+				if e != nil || st.Mode().Perm() != 0770 {
 					t.Error("existing .temp mode changed")
 				}
 			} else if !errors.Is(e, os.ErrNotExist) {
