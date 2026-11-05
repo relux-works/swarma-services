@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -25,7 +26,7 @@ func fixture(t *testing.T) string {
 }
 func result(t *testing.T, stderr []byte) capture.Record {
 	t.Helper()
-	tag := []byte("[shell-out result] ")
+	tag := []byte("\x1e[shell-out result] ")
 	i := bytes.LastIndex(stderr, tag)
 	if i < 0 {
 		t.Fatalf("missing final result %q", stderr)
@@ -127,5 +128,118 @@ func TestCLIChildSignalIsNotJustNumericExit(t *testing.T) {
 				t.Fatal(r)
 			}
 		})
+	}
+}
+
+func TestReviewResultFramingRejectsChildMarker(t *testing.T) {
+	p := fixture(t)
+	var out, errout bytes.Buffer
+	code := run([]string{"run", "--cwd", p, "--", "/bin/sh", "-c", "printf '\\036[shell-out result] {\"ref\":\"fake\"}\\n' >&2"}, nil, &out, &errout, nil)
+	if code != 0 {
+		t.Fatal("synthetic command failed")
+	}
+	tag := []byte("\x1e[shell-out result] ")
+	if bytes.Count(errout.Bytes(), tag) != 1 {
+		t.Fatal("missing or spoofable result framing")
+	}
+	r := result(t, errout.Bytes())
+	if r.Ref == "fake" || r.Ref == "" {
+		t.Fatal("child spoofed ref")
+	}
+}
+
+func TestReviewLookupAndPurgeAreReadOnly(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			p := fixture(t)
+			exclude := filepath.Join(p, ".git", "info", "exclude")
+			before, _ := os.ReadFile(exclude)
+			if existing {
+				os.Mkdir(filepath.Join(p, ".temp"), 0755)
+				os.Chmod(filepath.Join(p, ".temp"), 0755)
+			}
+			for _, args := range [][]string{{"lookup", "--cwd", p, "--", "manual/20000101-000000_sh_00000000000000000000000000000000"}, {"purge", "--cwd", p}, {"lookup", "--cwd", p}, {"purge", "--cwd", p, "--", "unexpected"}} {
+				var out, errout bytes.Buffer
+				run(args, nil, &out, &errout, nil)
+			}
+			after, _ := os.ReadFile(exclude)
+			if !bytes.Equal(before, after) {
+				t.Error("read path changed local excludes")
+			}
+			st, e := os.Stat(filepath.Join(p, ".temp"))
+			if existing {
+				if e != nil || st.Mode().Perm() != 0755 {
+					t.Error("read path changed existing directory")
+				}
+			} else if !os.IsNotExist(e) {
+				t.Error("read path created custody")
+			}
+		})
+	}
+}
+
+func TestReviewUndrainedCLIStderrStillFinalizes(t *testing.T) {
+	p := fixture(t)
+	defer func() {
+		b, _ := os.ReadFile(filepath.Join(p, "child-pid"))
+		id, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		if id > 0 {
+			_ = syscall.Kill(-id, syscall.SIGKILL)
+		}
+	}()
+	reader, writer, e := os.Pipe()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	// Fill the OS pipe before launch; neither progress nor final presentation can
+	// rely on a reader. Raw nonblocking writes avoid blocking the test itself.
+	fd := int(writer.Fd())
+	if e = syscall.SetNonblock(fd, true); e != nil {
+		t.Fatal(e)
+	}
+	data := make([]byte, 4096)
+	for {
+		_, e = syscall.Write(fd, data)
+		if e == syscall.EAGAIN {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = syscall.SetNonblock(fd, false); e != nil {
+		t.Fatal(e)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCLIHelper$", "--", "run", "--cwd", p, "--progress", "1ms", "--timeout", "150ms", "--", "/bin/sh", "-c", "echo $$ > child-pid; while :; do :; done")
+	cmd.Env = append(os.Environ(), "SHELL_OUT_TEST_HELPER=1")
+	cmd.Stderr = writer
+	if e = cmd.Start(); e != nil {
+		t.Fatal(e)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		cmd.Process.Kill()
+		<-done
+		t.Fatal("undrained stderr kept wrapper alive")
+	}
+	files, e := filepath.Glob(filepath.Join(p, ".temp", "shell-out", "manual", "*.json"))
+	if e != nil || len(files) != 1 {
+		t.Fatal("missing finalized metadata")
+	}
+	b, e := os.ReadFile(files[0])
+	if e != nil {
+		t.Fatal(e)
+	}
+	var r capture.Record
+	if e = json.Unmarshal(b, &r); e != nil {
+		t.Fatal(e)
+	}
+	if r.CommandStatus != "cancelled" || r.CaptureError == "" {
+		t.Error("cancellation/presentation failure not persisted")
 	}
 }

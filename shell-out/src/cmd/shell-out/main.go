@@ -41,6 +41,17 @@ func main() {
 	os.Exit(code)
 }
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer, signaled func(syscall.Signal)) int {
+	out, errout := capture.NewPresentation(stdout), capture.NewPresentation(stderr)
+	defer out.Close()
+	defer errout.Close()
+	code := runPresented(args, stdin, out, errout, signaled)
+	oe, ee := out.Flush(), errout.Flush()
+	if (oe != nil || ee != nil) && code == 0 {
+		return 125
+	}
+	return code
+}
+func runPresented(args []string, stdin io.Reader, stdout, stderr io.Writer, signaled func(syscall.Signal)) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: shell-out run|lookup|purge [options] -- argv...")
 		return 125
@@ -97,11 +108,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, signaled func
 			return 125
 		}
 		n, e := s.Purge(time.Now())
+		fmt.Fprintf(stdout, "purged %d expired captures\n", n)
 		if e != nil {
 			fmt.Fprintln(stderr, e)
 			return 125
 		}
-		fmt.Fprintf(stdout, "purged %d expired captures\n", n)
 		return 0
 	}
 	childEnv := os.Environ()
@@ -133,7 +144,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, signaled func
 	}
 	// Every started attempt ends with a machine-readable ref, separate from output.
 	if r.Ref != "" {
-		fmt.Fprint(stderr, "\n[shell-out result] ")
+		fmt.Fprint(stderr, "\n\x1e[shell-out result] ")
 		if je := json.NewEncoder(stderr).Encode(r); je != nil {
 			return 125
 		}

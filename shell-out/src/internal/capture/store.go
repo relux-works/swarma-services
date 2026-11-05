@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -68,16 +69,9 @@ func descend(parent *os.Root, name string, create, private bool) (*os.Root, erro
 			r.Close()
 			return nil, errors.New("private directory has another owner")
 		}
-		f, e := r.OpenFile(".", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-		if e != nil {
+		if st.Mode().Perm() != 0700 {
 			r.Close()
-			return nil, e
-		}
-		e = f.Chmod(0700)
-		f.Close()
-		if e != nil {
-			r.Close()
-			return nil, e
+			return nil, errors.New("existing private directory must have mode 0700")
 		}
 	}
 	return r, nil
@@ -129,22 +123,26 @@ func ignoredDestination(project, path string) error {
 }
 
 type Store struct {
+	mu      sync.Mutex
 	root    *os.Root
 	Path    string
 	project string
 }
 
-func (s *Store) Close() error { return s.root.Close() }
+func (s *Store) Close() error {
+	if s.root == nil {
+		return nil
+	}
+	return s.root.Close()
+}
 
-// OpenStore never changes tracked ignore files. The sole repository mutation is
-// appending /.temp/ to the local info/exclude when required.
+// OpenStore discovers custody without changing the repository or cache. Only
+// create initializes missing directories and local exclusions after preflight.
 func OpenStore(cwd string) (*Store, error) {
 	cwd, e := filepath.Abs(cwd)
 	if e != nil {
 		return nil, e
 	}
-	// Resolve the caller-selected anchor once (including macOS /var ->
-	// /private/var). Custody directories below it are never symlink-resolved.
 	cwd, e = filepath.EvalSymlinks(cwd)
 	if e != nil {
 		return nil, e
@@ -157,57 +155,9 @@ func OpenStore(cwd string) (*Store, error) {
 	project, ge := git(cwd, "rev-parse", "--show-toplevel")
 	var base string
 	if ge == nil {
-		root, e := absoluteRoot(project)
-		if e != nil {
-			return nil, e
-		}
-		defer root.Close()
-		tracked, e := git(project, "ls-files", "--", ".temp")
-		if e != nil {
-			return nil, e
-		}
-		if tracked != "" {
-			return nil, errors.New("refuse tracked .temp contents")
-		}
-		temp, e := descend(root, ".temp", true, true)
-		if e != nil {
-			return nil, e
-		}
-		temp.Close()
-		probe := filepath.Join(project, ".temp", "shell-out", "probe")
-		if _, e = git(project, "check-ignore", "-q", "--", probe); e != nil {
-			exclude, e := git(project, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
-			if e != nil {
-				return nil, e
-			}
-			er, e := absoluteRoot(filepath.Dir(exclude))
-			if e != nil {
-				return nil, e
-			}
-			f, e := er.OpenFile(filepath.Base(exclude), os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
-			er.Close()
-			if e != nil {
-				return nil, e
-			}
-			if e = regularOwnedFile(f); e != nil {
-				f.Close()
-				return nil, e
-			}
-			_, we := io.WriteString(f, "\n/.temp/\n")
-			ce := f.Close()
-			if we != nil {
-				return nil, we
-			}
-			if ce != nil {
-				return nil, ce
-			}
-		}
-		if e = ignoredDestination(project, probe); e != nil {
-			return nil, e
-		}
 		base = filepath.Join(project, ".temp")
 	} else {
-		// A broken Git worktree is not silently treated as a non-Git directory.
+		project = ""
 		for p := cwd; ; p = filepath.Dir(p) {
 			if _, e := os.Lstat(filepath.Join(p, ".git")); e == nil {
 				return nil, errors.New("git worktree detection failed")
@@ -220,23 +170,173 @@ func OpenStore(cwd string) (*Store, error) {
 		if e != nil {
 			return nil, e
 		}
-		// Cache ancestors must already exist; create only our private custody root.
-		cacheRoot, ce := walkAbsolute(base, true)
-		if ce != nil {
-			return nil, ce
+	}
+	s := &Store{Path: filepath.Join(base, "shell-out"), project: project}
+	// Opening an existing store is read-only, including its permissions.
+	r, e := absoluteRoot(base)
+	if errors.Is(e, os.ErrNotExist) {
+		return s, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	defer r.Close()
+	if project != "" {
+		st, e := r.Stat(".")
+		if e != nil {
+			return nil, e
 		}
-		cacheRoot.Close()
+		if st.Mode().Perm() != 0700 || st.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) {
+			return nil, errors.New("existing .temp must be owned and mode 0700")
+		}
 	}
-	root, e := absoluteRoot(base)
+	s.root, e = descend(r, "shell-out", false, true)
+	if errors.Is(e, os.ErrNotExist) {
+		return s, nil
+	}
 	if e != nil {
 		return nil, e
 	}
-	defer root.Close()
-	r, e := descend(root, "shell-out", true, true)
+	return s, nil
+}
+
+// excludeRoot anchors at the common gitdir, never Git's symlink-resolved
+// info/exclude filename. This also handles linked worktrees' shared excludes.
+func (s *Store) excludeRoot() (*os.Root, error) {
+	common, e := git(s.project, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if e != nil {
 		return nil, e
 	}
-	return &Store{root: r, Path: filepath.Join(base, "shell-out"), project: project}, nil
+	r, e := absoluteRoot(common)
+	if e != nil {
+		return nil, e
+	}
+	defer r.Close()
+	info, e := descend(r, "info", false, false)
+	if e != nil {
+		return nil, e
+	}
+	st, e := info.Lstat("exclude")
+	if e != nil && !errors.Is(e, os.ErrNotExist) {
+		info.Close()
+		return nil, e
+	}
+	if e == nil && !st.Mode().IsRegular() {
+		info.Close()
+		return nil, errors.New("unsafe info/exclude")
+	}
+	return info, nil
+}
+
+// canIgnore determines whether appending the fixed local exclusion can help.
+// Per-directory .gitignore negations outrank info/exclude; refuse them before
+// any write. Git's -z framing preserves spaces/newlines in source filenames.
+func (s *Store) canIgnore(paths []string) (bool, error) {
+	c := exec.Command("git", "-C", s.project, "check-ignore", "-v", "-n", "-z", "--stdin")
+	c.Stdin = strings.NewReader(strings.Join(paths, "\x00") + "\x00")
+	b, e := c.Output()
+	var ee *exec.ExitError
+	if e != nil && (!errors.As(e, &ee) || ee.ExitCode() != 1) {
+		return false, e
+	}
+	parts := strings.Split(string(b), "\x00")
+	if len(parts) != 4*len(paths)+1 {
+		return false, errors.New("invalid check-ignore response")
+	}
+	appendRule := false
+	for i := 0; i < len(paths); i++ {
+		source, pattern := parts[i*4], parts[i*4+2]
+		if strings.HasPrefix(pattern, "!") && !filepath.IsAbs(source) {
+			return false, errors.New("refuse destination negated by project ignore rules")
+		}
+		if source == "" || strings.HasPrefix(pattern, "!") {
+			appendRule = true
+		}
+	}
+	return appendRule, nil
+}
+
+func (s *Store) initialize() error {
+	if s.root != nil {
+		return nil
+	}
+	base := filepath.Dir(s.Path)
+	var r *os.Root
+	var e error
+	if s.project != "" {
+		parent, pe := absoluteRoot(s.project)
+		if pe != nil {
+			return pe
+		}
+		r, e = descend(parent, ".temp", true, true)
+		parent.Close()
+	} else {
+		r, e = walkAbsolute(base, true)
+	}
+	if e != nil {
+		return e
+	}
+	defer r.Close()
+	s.root, e = descend(r, "shell-out", true, true)
+	return e
+}
+
+// preflight checks existing custody and every exact destination before bootstrap.
+func (s *Store) preflight(session, name, initialTemp string) error {
+	if s.root != nil {
+		r, e := descend(s.root, session, false, true)
+		if e == nil {
+			r.Close()
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return e
+		}
+	}
+	if s.project == "" {
+		return nil
+	}
+	tracked, e := git(s.project, "ls-files", "--", ".temp")
+	if e != nil {
+		return e
+	}
+	if tracked != "" {
+		return errors.New("refuse tracked .temp contents")
+	}
+	paths := []string{}
+	for _, suffix := range []string{".json", ".lock", ".out.log", ".err.log"} {
+		paths = append(paths, filepath.Join(s.Path, session, name+suffix))
+	}
+	paths = append(paths, filepath.Join(s.Path, session, initialTemp))
+	appendRule, e := s.canIgnore(paths)
+	if e != nil {
+		return e
+	}
+	if appendRule {
+		er, e := s.excludeRoot()
+		if e != nil {
+			return e
+		}
+		defer er.Close()
+		f, e := er.OpenFile("exclude", os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+		if e != nil {
+			return e
+		}
+		defer f.Close()
+		if e = regularOwnedFile(f); e != nil {
+			return e
+		}
+		if _, e = io.WriteString(f, "\n/.temp/\n"); e != nil {
+			return e
+		}
+		if e = f.Sync(); e != nil {
+			return e
+		}
+	}
+	if need, e := s.canIgnore(paths); e != nil {
+		return e
+	} else if need {
+		return errors.New("refuse destination not ignored by git")
+	}
+	return nil
 }
 
 type Record struct {
@@ -260,6 +360,9 @@ type call struct {
 	meta, out, err *os.File
 	name           string
 	record         Record
+	project        string
+	published      bool
+	nextTemp       string
 }
 
 func (c *call) close() {
@@ -283,53 +386,65 @@ func exclusive(r *os.Root, name string) (*os.File, error) {
 	}
 	if e = f.Chmod(0600); e != nil {
 		f.Close()
+		_ = r.Remove(name)
 		return nil, e
 	}
 	return f, nil
 }
 func (s *Store) create(session string, argv []string, hours float64) (*call, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !safe.MatchString(session) {
 		return nil, errors.New("invalid session label")
+	}
+	id, e := randomID()
+	if e != nil {
+		return nil, e
+	}
+	name := time.Now().UTC().Format("20060102-150405") + "_" + slug(argv) + "_" + id
+	tempID, e := randomID()
+	if e != nil {
+		return nil, e
+	}
+	initialTemp := name + ".json.tmp-" + tempID
+	if e = s.preflight(session, name, initialTemp); e != nil {
+		return nil, e
+	}
+	if e = s.initialize(); e != nil {
+		return nil, e
 	}
 	dir, e := descend(s.root, session, true, true)
 	if e != nil {
 		return nil, e
 	}
-	id, e := randomID()
-	if e != nil {
-		dir.Close()
-		return nil, e
-	}
-	name := time.Now().UTC().Format("20060102-150405") + "_" + slug(argv) + "_" + id
-	if s.project != "" {
-		for _, suffix := range []string{".json", ".out.log", ".err.log"} {
-			if e = ignoredDestination(s.project, filepath.Join(s.Path, session, name+suffix)); e != nil {
-				dir.Close()
-				return nil, e
-			}
-		}
-	}
-	c := &call{dir: dir, name: name}
+	c := &call{dir: dir, name: name, project: s.project, nextTemp: initialTemp}
+	created := []string{}
 	ok := false
 	defer func() {
 		if !ok {
+			if c.published {
+				_ = dir.Remove(name + ".json")
+			}
+			for _, n := range created {
+				_ = dir.Remove(n)
+			}
 			c.close()
 		}
 	}()
-	c.meta, e = exclusive(dir, name+".json")
-	if e != nil {
-		return nil, e
-	}
-	if e = syscall.Flock(int(c.meta.Fd()), syscall.LOCK_EX); e != nil {
-		return nil, e
-	}
-	c.out, e = exclusive(dir, name+".out.log")
-	if e != nil {
-		return nil, e
-	}
-	c.err, e = exclusive(dir, name+".err.log")
-	if e != nil {
-		return nil, e
+	for _, item := range []struct {
+		suffix string
+		file   **os.File
+	}{{".lock", &c.meta}, {".out.log", &c.out}, {".err.log", &c.err}} {
+		*item.file, e = exclusive(dir, name+item.suffix)
+		if e != nil {
+			return nil, e
+		}
+		created = append(created, name+item.suffix)
+		if item.suffix == ".lock" {
+			if e = syscall.Flock(int(c.meta.Fd()), syscall.LOCK_EX); e != nil {
+				return nil, e
+			}
+		}
 	}
 	c.record = Record{Ref: session + "/" + name, Stdout: filepath.Join(s.Path, session, name+".out.log"), Stderr: filepath.Join(s.Path, session, name+".err.log"), ExitCode: -1, CommandStatus: "running", CaptureStatus: "running", Started: time.Now().UTC(), Expires: time.Now().UTC().Add(time.Duration(hours * float64(time.Hour)))}
 	if e = c.save(); e != nil {
@@ -338,17 +453,71 @@ func (s *Store) create(session string, argv []string, hours float64) (*call, err
 	ok = true
 	return c, nil
 }
+
+// save never truncates published JSON. The stable .lock inode protects the
+// record across atomic replacements; old records without .lock remain readable.
 func (c *call) save() error {
-	if _, e := c.meta.Seek(0, 0); e != nil {
+	temp := c.nextTemp
+	c.nextTemp = ""
+	var e error
+	if temp == "" {
+		id, re := randomID()
+		if re != nil {
+			return re
+		}
+		temp = c.name + ".json.tmp-" + id
+	}
+	if c.project != "" {
+		if e = ignoredDestination(c.project, filepath.Join(filepath.Dir(c.record.Stdout), temp)); e != nil {
+			return e
+		}
+	}
+	f, e := exclusive(c.dir, temp)
+	if e != nil {
 		return e
 	}
-	if e := c.meta.Truncate(0); e != nil {
+	defer c.dir.Remove(temp)
+	e = json.NewEncoder(f).Encode(c.record)
+	if e == nil {
+		e = f.Sync()
+	}
+	ce := f.Close()
+	if e != nil {
 		return e
 	}
-	if e := json.NewEncoder(c.meta).Encode(c.record); e != nil {
+	if ce != nil {
+		return ce
+	}
+	if e = c.dir.Rename(temp, c.name+".json"); e != nil {
 		return e
 	}
-	return c.meta.Sync()
+	c.published = true
+	d, e := c.dir.Open(".")
+	if e != nil {
+		return e
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// lockRecord uses the new stable lock, or the metadata inode for legacy records.
+// Neither lookup nor purge creates lock files.
+func lockRecord(dir *os.Root, name string, mode int) (*os.File, error) {
+	f, e := dir.OpenFile(name+".lock", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(e, os.ErrNotExist) {
+		f, e = dir.OpenFile(name+".json", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	}
+	if e != nil {
+		return nil, e
+	}
+	if e = privateFile(f); e == nil {
+		e = syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB)
+	}
+	if e != nil {
+		f.Close()
+		return nil, e
+	}
+	return f, nil
 }
 func splitRef(ref string) (string, string, error) {
 	p := strings.Split(ref, "/")
@@ -358,6 +527,11 @@ func splitRef(ref string) (string, string, error) {
 	return p[0], p[1], nil
 }
 func (s *Store) Lookup(ref string) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.root == nil {
+		return Record{}, errors.New("expired or unknown ref")
+	}
 	session, name, e := splitRef(ref)
 	if e != nil {
 		return Record{}, e
@@ -367,6 +541,11 @@ func (s *Store) Lookup(ref string) (Record, error) {
 		return Record{}, errors.New("expired or unknown ref")
 	}
 	defer dir.Close()
+	lock, e := lockRecord(dir, name, syscall.LOCK_SH)
+	if e != nil {
+		return Record{}, fmt.Errorf("capture unavailable or running: %w", e)
+	}
+	defer lock.Close()
 	f, e := dir.OpenFile(name+".json", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if e != nil {
 		return Record{}, errors.New("expired or unknown ref")
@@ -374,9 +553,6 @@ func (s *Store) Lookup(ref string) (Record, error) {
 	defer f.Close()
 	if e = privateFile(f); e != nil {
 		return Record{}, e
-	}
-	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); e != nil {
-		return Record{}, errors.New("capture running")
 	}
 	var r Record
 	if e = json.NewDecoder(io.LimitReader(f, 65536)).Decode(&r); e != nil {
@@ -405,6 +581,11 @@ func (s *Store) Lookup(ref string) (Record, error) {
 // Purge leaves metadata tombstones. It never recursively removes a directory or
 // follows symlinks, and an OS lock protects every live run even after expiry.
 func (s *Store) Purge(now time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.root == nil {
+		return 0, nil
+	}
 	top, e := s.root.Open(".")
 	if e != nil {
 		return 0, e
@@ -415,77 +596,112 @@ func (s *Store) Purge(now time.Time) (int, error) {
 		return 0, e
 	}
 	n := 0
+	var warnings []error
+	warn := func(ref string, e error) { warnings = append(warnings, fmt.Errorf("skipped %s: %w", ref, e)) }
 	for _, entry := range entries {
 		if !entry.IsDir() || !safe.MatchString(entry.Name()) {
 			continue
 		}
-		dir, e := descend(s.root, entry.Name(), false, false)
+		dir, e := descend(s.root, entry.Name(), false, true)
 		if e != nil {
-			return n, e
+			warn(entry.Name(), e)
+			continue
 		}
 		d, e := dir.Open(".")
 		if e != nil {
+			warn(entry.Name(), e)
 			dir.Close()
-			return n, e
+			continue
 		}
 		files, e := d.ReadDir(-1)
 		d.Close()
 		if e != nil {
+			warn(entry.Name(), e)
 			dir.Close()
-			return n, e
+			continue
 		}
 		for _, f := range files {
 			name := strings.TrimSuffix(f.Name(), ".json")
 			if name == f.Name() || !recordName.MatchString(name) {
 				continue
 			}
-			meta, e := dir.OpenFile(f.Name(), os.O_RDWR|syscall.O_NOFOLLOW, 0)
-			if e != nil {
-				dir.Close()
-				return n, e
-			}
-			if e = privateFile(meta); e != nil {
-				meta.Close()
-				dir.Close()
-				return n, e
-			}
-			if syscall.Flock(int(meta.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
-				meta.Close()
+			ref := entry.Name() + "/" + name
+			lock, e := lockRecord(dir, name, syscall.LOCK_EX)
+			if errors.Is(e, syscall.EWOULDBLOCK) || errors.Is(e, syscall.EAGAIN) {
 				continue
 			}
-			var r Record
-			e = json.NewDecoder(io.LimitReader(meta, 65536)).Decode(&r)
-			if e == nil && r.Ref == entry.Name()+"/"+name && r.CaptureStatus != "expired" && r.CommandStatus != "running" && !now.Before(r.Expires) {
+			if e != nil {
+				warn(ref, e)
+				continue
+			}
+			// Scope each lock to one record, including all refusal paths.
+			func() {
+				defer lock.Close()
+				meta, e := dir.OpenFile(f.Name(), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+				if e != nil {
+					warn(ref, e)
+					return
+				}
+				if e = privateFile(meta); e != nil {
+					meta.Close()
+					warn(ref, e)
+					return
+				}
+				var r Record
+				e = json.NewDecoder(io.LimitReader(meta, 65536)).Decode(&r)
+				meta.Close()
+				if e != nil {
+					warn(ref, errors.New("undecodable metadata; inspect manually"))
+					return
+				}
+				if r.Ref != ref || r.Expires.IsZero() ||
+					r.Stdout != filepath.Join(s.Path, entry.Name(), name+".out.log") ||
+					r.Stderr != filepath.Join(s.Path, entry.Name(), name+".err.log") {
+					warn(ref, errors.New("invalid metadata; inspect manually"))
+					return
+				}
+				if r.CaptureStatus == "expired" || r.CommandStatus == "running" || r.CommandStatus == "not_started" || now.Before(r.Expires) {
+					return
+				}
+				switch r.CommandStatus {
+				case "exited", "signaled", "cancelled", "spawn_failed":
+				default:
+					warn(ref, errors.New("unknown command status; inspect manually"))
+					return
+				}
+				// Validate both logs before deleting either one.
 				for _, suffix := range []string{".out.log", ".err.log"} {
-					st, se := dir.Lstat(name + suffix)
-					if errors.Is(se, os.ErrNotExist) {
+					log, e := dir.OpenFile(name+suffix, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+					if errors.Is(e, os.ErrNotExist) {
 						continue
 					}
-					if se != nil || !st.Mode().IsRegular() {
-						e = errors.New("unsafe purge entry")
-						break
+					if e == nil {
+						e = privateFile(log)
+						log.Close()
 					}
-					if se = dir.Remove(name + suffix); se != nil {
-						e = se
-						break
+					if e != nil {
+						warn(ref, e)
+						return
 					}
 				}
-				if e == nil {
-					r.CaptureStatus = "expired"
-					c := call{meta: meta, record: r}
-					e = c.save()
-					n++
+				for _, suffix := range []string{".out.log", ".err.log"} {
+					if e = dir.Remove(name + suffix); e != nil && !errors.Is(e, os.ErrNotExist) {
+						warn(ref, e)
+						return
+					}
 				}
-			}
-			meta.Close()
-			if e != nil {
-				dir.Close()
-				return n, e
-			}
+				r.CaptureStatus = "expired"
+				c := call{dir: dir, name: name, record: r, project: s.project}
+				if e = c.save(); e != nil {
+					warn(ref, e)
+					return
+				}
+				n++
+			}()
 		}
 		dir.Close()
 	}
-	return n, nil
+	return n, errors.Join(warnings...)
 }
 
 func privateFile(f *os.File) error {

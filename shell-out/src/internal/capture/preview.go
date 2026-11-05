@@ -63,7 +63,7 @@ func (s *stream) Write(p []byte) (int, error) {
 		if c == 0 {
 			s.binary = true
 		}
-		if c < 32 && c != '\n' || c == 127 {
+		if c < 32 && c != '\n' && c != '\t' || c == 127 {
 			s.controls = true
 		}
 	}
@@ -129,7 +129,7 @@ func escaped(p []byte, limit, lines int) string {
 			piece = "\n"
 			line++
 		} else if r == '\t' {
-			piece = "\\t"
+			piece = "\t"
 		} else if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029 {
 			piece = fmt.Sprintf("\\u%04x", r)
 		} else {
@@ -161,14 +161,20 @@ func (s *stream) preview(progress bool) []byte {
 		}
 	}
 	if progress {
-		return []byte("[tail preview]\n" + escaped(s.tail, 1024, 10) + "\n")
+		return []byte("[tail preview]\n" + escaped(latest(s.tail, 1024, 10), 1024, 10) + "\n")
 	}
 	if s.stats.Observed <= previewBytes && logicalLines <= previewLines {
 		return []byte(escaped(s.head, previewBytes, previewLines) + "\n[escaped preview]\n")
 	}
 	head := escaped(s.head, previewBytes/2, previewLines/2)
 	// Keep the last lines, with a byte bound even for one giant line.
-	tail := s.tail
+	tail := latest(s.tail, previewBytes/2, previewLines/2)
+	return []byte(head + "\n[... bounded preview; inspect private logs ...]\n" + escaped(tail, previewBytes/2, previewLines/2) + "\n")
+}
+
+// latest selects the newest lines and bytes before rendered escaping imposes its
+// own bound. Do not include an earlier prefix of the tail window as progress.
+func latest(tail []byte, byteLimit, lineLimit int) []byte {
 	end := len(tail)
 	if end > 0 && tail[end-1] == '\n' {
 		end--
@@ -177,14 +183,14 @@ func (s *stream) preview(progress bool) []byte {
 	for i := end - 1; i >= 0; i-- {
 		if tail[i] == '\n' {
 			count++
-			if count == previewLines/2 {
+			if count == lineLimit {
 				tail = tail[i+1:]
 				break
 			}
 		}
 	}
-	if len(tail) > previewBytes/2 {
-		tail = tail[len(tail)-previewBytes/2:]
+	if len(tail) > byteLimit {
+		tail = tail[len(tail)-byteLimit:]
 	}
-	return []byte(head + "\n[... bounded preview; inspect private logs ...]\n" + escaped(tail, previewBytes/2, previewLines/2) + "\n")
+	return tail
 }

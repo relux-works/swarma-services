@@ -37,6 +37,9 @@ func store(t *testing.T) (*Store, string) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if e = s.initialize(); e != nil {
+		t.Fatal(e)
+	}
 	t.Cleanup(func() { s.Close() })
 	return s, p
 }
@@ -239,9 +242,26 @@ func TestForwardInterruptPreservesActualOutcome(t *testing.T) {
 	signals := make(chan os.Signal, 1)
 	o := options(p, "trap 'exit 42' INT; printf ready; while :; do :; done")
 	o.Signals = signals
-	go func() { time.Sleep(100 * time.Millisecond); signals <- syscall.SIGINT }()
+	ready := make(chan bool, 1)
+	go func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			files, _ := filepath.Glob(filepath.Join(s.Path, "test", "*.out.log"))
+			for _, f := range files {
+				b, _ := os.ReadFile(f)
+				if bytes.Equal(b, []byte("ready")) {
+					ready <- true
+					signals <- syscall.SIGINT
+					return
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		ready <- false
+		signals <- syscall.SIGINT
+	}()
 	r, e := s.Run(context.Background(), o)
-	if e != nil || r.ExitCode != 42 || r.CommandStatus != "cancelled" {
+	if !<-ready || e != nil || r.ExitCode != 42 || r.CommandStatus != "cancelled" {
 		t.Fatalf("%+v %v", r, e)
 	}
 }
@@ -302,6 +322,9 @@ func TestIgnoredTrackedAndNotIgnoredPair(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if _, e = s.Run(context.Background(), options(p, "true")); e != nil {
+		t.Fatal(e)
+	}
 	s.Close()
 	if e := ignoredDestination(p, dest); e != nil {
 		t.Fatal(e)
@@ -313,16 +336,24 @@ func TestIgnoredTrackedAndNotIgnoredPair(t *testing.T) {
 	if e := c.Run(); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := OpenStore(p); e == nil {
-		t.Fatal("tracked destination accepted")
+	if s, e := OpenStore(p); e == nil {
+		_, e = s.Run(context.Background(), options(p, "true"))
+		s.Close()
+		if e == nil {
+			t.Fatal("tracked destination accepted")
+		}
 	}
 	// A higher-priority project negation defeats info/exclude; tool must refuse.
 	q := project(t)
 	if e := os.WriteFile(filepath.Join(q, ".gitignore"), []byte("!.temp/\n!.temp/**\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := OpenStore(q); e == nil {
-		t.Fatal("still not ignored accepted")
+	if s, e := OpenStore(q); e == nil {
+		_, e = s.Run(context.Background(), options(q, "true"))
+		s.Close()
+		if e == nil {
+			t.Fatal("still not ignored accepted")
+		}
 	}
 }
 func TestPurgeRunningExpiredRefAndNonReuse(t *testing.T) {

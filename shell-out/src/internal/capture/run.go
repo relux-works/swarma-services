@@ -48,6 +48,12 @@ func (s *Store) run(ctx context.Context, o Options, destination func(*os.File) i
 	if o.Stderr == nil {
 		o.Stderr = io.Discard
 	}
+	presentOut, closeOut := presentation(o.Stdout)
+	defer closeOut()
+	presentErr, closeErr := presentation(o.Stderr)
+	defer closeErr()
+	o.Stdout = presentOut
+	o.Stderr = presentErr
 	out, errout := newStream(destination(c.out), o.MaxCaptureBytes), newStream(destination(c.err), o.MaxCaptureBytes)
 	unstarted := func(problem error) (Record, error) {
 		c.record.CommandStatus = "spawn_failed"
@@ -98,9 +104,9 @@ func (s *Store) run(ctx context.Context, o Options, destination func(*os.File) i
 	}
 	wo.Close()
 	we.Close()
-	drained := make(chan struct{}, 2)
-	go func() { _, e := io.Copy(out, ro); out.fail(e); drained <- struct{}{} }()
-	go func() { _, e := io.Copy(errout, re); errout.fail(e); drained <- struct{}{} }()
+	drained := make(chan int, 2)
+	go func() { _, e := io.Copy(out, ro); out.fail(e); drained <- 0 }()
+	go func() { _, e := io.Copy(errout, re); errout.fail(e); drained <- 1 }()
 	waited := make(chan error, 1)
 	go func() { waited <- cmd.Wait() }()
 	interval := o.ProgressInterval
@@ -145,9 +151,12 @@ waitLoop:
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			escalation = nil
 		case <-ticker.C:
-			fmt.Fprintf(o.Stderr, "\n[capture running ref=%s stdout_bytes=%d stderr_bytes=%d]\n", c.record.Ref, out.snapshot().Observed, errout.snapshot().Observed)
-			_, _ = o.Stderr.Write(out.preview(true))
-			_, _ = o.Stderr.Write(errout.preview(true))
+			// A single bounded packet prevents interleaved preview fragments.
+			b := []byte(fmt.Sprintf("\n[capture running ref=%s stdout_bytes=%d stderr_bytes=%d]\n", c.record.Ref, out.snapshot().Observed, errout.snapshot().Observed))
+			b = append(b, out.preview(true)...)
+			b = append(b, errout.preview(true)...)
+			_, _ = o.Stderr.Write(b) // full queues drop progress
+
 		}
 	}
 	// Background jobs are scoped to this invocation, not persistent session jobs.
@@ -157,17 +166,30 @@ waitLoop:
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	deadline := time.NewTimer(time.Second)
 	defer deadline.Stop()
+	complete := [2]bool{}
 	for n := 0; n < 2; {
 		select {
-		case <-drained:
+		case stream := <-drained:
+			complete[stream] = true
 			n++
 		case <-deadline.C:
-			out.fail(errors.New("pipe drain deadline; descendant may have escaped process group"))
-			errout.fail(errors.New("pipe drain deadline; descendant may have escaped process group"))
-			ro.Close()
-			re.Close()
+			// Completion may already be queued when the timer becomes ready.
+			for len(drained) > 0 {
+				stream := <-drained
+				complete[stream] = true
+				n++
+			}
+			if !complete[0] {
+				out.fail(errors.New("pipe drain deadline; descendant may have escaped process group"))
+				ro.Close()
+			}
+			if !complete[1] {
+				errout.fail(errors.New("pipe drain deadline; descendant may have escaped process group"))
+				re.Close()
+			}
 			for n < 2 {
-				<-drained
+				stream := <-drained
+				complete[stream] = true
 				n++
 			}
 		}
@@ -206,6 +228,11 @@ waitLoop:
 	}
 	if _, pe := o.Stderr.Write(errout.preview(false)); pe != nil {
 		c.record.CaptureError = "presentation failed: " + pe.Error()
+	}
+	for _, p := range []*Presentation{presentOut, presentErr} {
+		if pe := p.Flush(); pe != nil {
+			c.record.CaptureError = "presentation failed: " + pe.Error()
+		}
 	}
 	if c.record.CaptureError != "" {
 		if se := c.save(); se != nil {
