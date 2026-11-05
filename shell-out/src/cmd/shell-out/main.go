@@ -28,6 +28,11 @@ func (e *envFlags) Set(s string) error {
 	return nil
 }
 func main() {
+	// Let broken stdout/stderr writes return EPIPE to presentation finalization.
+	// Use a separate, bounded notification sink: SIGPIPE must not cancel the
+	// child, and Ignore would pass SIG_IGN through exec to child commands.
+	// Caught handlers are reset on exec, preserving the child's own SIGPIPE.
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 	var childSignal syscall.Signal
 	code := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, func(s syscall.Signal) { childSignal = s })
 	if childSignal != 0 {
