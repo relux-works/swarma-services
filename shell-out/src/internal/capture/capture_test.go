@@ -211,28 +211,17 @@ func TestWriteFailureRetainsBoundedObservedAndCommandOutcome(t *testing.T) {
 	}
 }
 func TestCancellationProgressAndBackgroundLifecycle(t *testing.T) {
+	t.Run("child-readiness-delayed", func(t *testing.T) { cancellationAfterProgress(t, true) })
+	t.Run("progress-delayed", func(t *testing.T) { cancellationAfterProgress(t, false) })
+	// Retain the existing background-job contract independently of foreground
+	// readiness: returning from Run must not leave the background marker writer.
 	s, p := store(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Millisecond)
-	defer cancel()
-	var progress bytes.Buffer
-	o := options(p, "printf before; while :; do sleep 1; done")
-	o.ProgressInterval = 30 * time.Millisecond
-	o.Stderr = &progress
-	start := time.Now()
-	r, e := s.Run(ctx, o)
-	if e != nil {
-		t.Fatal(e)
-	}
-	a, _ := logs(t, r)
-	if time.Since(start) > 3*time.Second || r.CommandStatus != "cancelled" || r.ExitCode != 143 || string(a) != "before" || !strings.Contains(progress.String(), "capture running ref=") {
-		t.Fatalf("cancellation %+v %q", r, progress.String())
-	}
-	r, _, _ = runScript(t, s, p, "(sleep 1; printf escaped > background-marker) & printf foreground")
+	r, _, _ := runScript(t, s, p, "(sleep 1; printf escaped > background-marker) & printf foreground")
 	time.Sleep(1100 * time.Millisecond)
 	if _, e := os.Stat(filepath.Join(p, "background-marker")); !errors.Is(e, os.ErrNotExist) {
 		t.Fatal("background child survived")
 	}
-	a, _ = logs(t, r)
+	a, _ := logs(t, r)
 	if string(a) != "foreground" {
 		t.Fatalf("%q", a)
 	}
