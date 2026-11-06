@@ -20,4 +20,4 @@ No service, user, key, ACL, Keychain, sudo, daemon or private broker operation i
 
 The original requirements, current first-admission-only amendment and broker compatibility addendum have been
 received. Historical per-release-presence wording remains superseded. The known source boundary is documented
-in [broker compatibility inputs](signer/docs/broker-compatibility-v1.md); it is not runtime acceptance.
+in [broker compatibility inputs](signer/docs/baseline-r5.md#kek-broker-compatibility-inputs); it is not runtime acceptance.

@@ -20,12 +20,18 @@ Owner, 2026-11-01: «так ты говоришь нет подписи у ку�
 
 Status: preparation.
 
-The [proposed version 1 contract](docs/contract-v1.md) defines the source, builder, signer and client boundaries.
-Client parameters and host custody are awaiting confirmation; this document does not describe an installed service.
-The [authority adapter](docs/authority-v1.md) keeps evidence credentials outside the signer and builder; the
-[first Curator build proposal](docs/curator-build-v1.md) separates known source facts from unqualified recipe inputs.
-The [finite protocol proposal](docs/protocol-v1.md) and its declarative counterexamples specify expected behavior;
-they are not executable parser or runtime checks.
+The version 1 design comprises the [baseline](docs/baseline-r5.md),
+[builder and DATA contract](docs/builder-wire-data-r2.md),
+[manifest capacity specification](docs/manifest-capacity-r3.md) and
+[integrated addendum](docs/integrated-addendum-r2.md), read in that order. The integrated addendum controls
+its explicit changes to earlier text, including module receipts and the proposed manifest capacity.
+The baseline defines the independent source, evidence adapter, builder, signer and client boundaries.
+The [open qualification register](../UNRESOLVED_QUESTIONS.md) records the remaining source and host inputs.
+These documents describe a design; no signer implementation, installation or runtime qualification is shipped.
+
+The current admitted manifest limit remains 1 MiB. The proposed 4 MiB limit requires its specified parser,
+headroom and activation checks. The [contract cases](docs/examples/contract-cases-v1.json) and specification
+tables are declarative expectations, rather than executed parser, checksum, build or isolation tests.
 
 ## Tools
 

@@ -436,7 +436,7 @@
       "expected": "reject_against_source_go_sum_before_compile"
     },
     {
-      "name": "missing_selected_module_or_metadata",
+      "name": "missing_requested_graph_metadata_or_required_compiled_content",
       "expected": "reject_incomplete_offline_closure_no_download_or_sum_write"
     },
     {
