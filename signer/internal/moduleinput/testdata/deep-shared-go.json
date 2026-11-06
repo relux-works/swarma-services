@@ -1,0 +1,9 @@
+{
+  "Count": 8192,
+  "Depth": 256,
+  "GoMod": "module example.com/deepshared\n\ngo 1.24.0\n",
+  "GoModH1": "h1:MIrlpw3yNj4r+2Oe5oBgdI4jGmOVtV/cqqPahmKCiAs=",
+  "ModuleH1": "h1:SjYKG/qo1LaiGjb5TPJDyU5ziBWvxpaKW+uVhXpCESo=",
+  "Path": "example.com/deepshared",
+  "Version": "v1.0.0"
+}

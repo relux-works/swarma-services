@@ -18,7 +18,16 @@ launcher follows later. The network proxy's KEK broker is the second client afte
 
 Owner, 2026-11-01: «так ты говоришь нет подписи у куратора ну так давай подписывать».
 
-Status: preparation.
+## Implementation status
+
+The independent Go module currently implements `internal/moduleinput`, a pure verifier of supplied module material.
+It takes ordered typed records and file entries, checks finite bounds, copies an immutable snapshot, binds the exact
+source bytes and verifies original `go.sum` anchors and standard Go checksums. It checks every supplied record,
+including records unused by a later build. Returned content has no mutable aliases to caller buffers.
+
+A verified supplied subset does not establish source authority, graph completeness or the sufficiency of omitted
+material. Raw manifest parsing, whole-manifest accounting, cache synthesis, production builds, signing and service
+installation remain to be integrated and qualified. There is no service entrypoint or installation command yet.
 
 The version 1 design comprises the [baseline](docs/baseline-r5.md),
 [builder and DATA contract](docs/builder-wire-data-r2.md),
@@ -27,17 +36,30 @@ The version 1 design comprises the [baseline](docs/baseline-r5.md),
 its explicit changes to earlier text, including module receipts and the proposed manifest capacity.
 The baseline defines the independent source, evidence adapter, builder, signer and client boundaries.
 The [open qualification register](../UNRESOLVED_QUESTIONS.md) records the remaining source and host inputs.
-These documents describe a design; no signer implementation, installation or runtime qualification is shipped.
 
 The current admitted manifest limit remains 1 MiB. The proposed 4 MiB limit requires its specified parser,
 headroom and activation checks. The [contract cases](docs/examples/contract-cases-v1.json) and specification
-tables are declarative expectations, rather than executed parser, checksum, build or isolation tests.
+tables remain declarative expectations. Executable pure-package tests cover only their applicable typed subset;
+they do not establish parser, production build or native isolation qualification.
 
 ## Tools
 
-This subproject currently contains documentation only. No build, signing or installation command is shipped yet.
-Use `git diff --check` from the repository root to check documentation patches. Build and verification artifacts
-belong in the ignored `.temp/` directory until the service defines its own supported output paths.
-Python 3 can check that the declarative fixture file is valid JSON:
+Use Go 1.24 or newer for development. Dependencies are pinned in this module's `go.mod` and `go.sum`.
+From the repository root, run each selected lane and inspect every exit code:
+
+```sh
+mkdir -p .temp/signer-tests
+GOTOOLCHAIN=local go -C signer test -count=1 ./... > .temp/signer-tests/unit.log 2>&1
+GOTOOLCHAIN=local go -C signer test -race -count=1 ./... > .temp/signer-tests/race.log 2>&1
+GOTOOLCHAIN=local go -C signer vet ./... > .temp/signer-tests/vet.log 2>&1
+```
+
+These commands compile and check the pure package; they do not run a signer or qualify a production toolchain.
+Tests use owned temporary directories for writes and read fixed checksum vectors from `internal/moduleinput/testdata`.
+Go manages its normal module and build caches; the example logs and other temporary project evidence stay in ignored
+`.temp/`.
+
+Use `git diff --check` from the repository root to check patch whitespace. Python 3 can check that the declarative
+fixture file is valid JSON:
 `mkdir -p .temp && python3 -m json.tool signer/docs/examples/contract-cases-v1.json > .temp/contract-cases-v1.json`.
 That command validates JSON serialization only.
