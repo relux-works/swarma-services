@@ -93,6 +93,7 @@ func testArrayCountPunctuation(t *testing.T, field string, max int, decode func(
 				eof         bool
 			}{
 				{"truncated_true", "tru", true},
+				{"truncated_false", "f", true},
 				{"malformed_true", "tru", false},
 				{"truncated_number", "-", true},
 				{"malformed_number", "1x", false},
