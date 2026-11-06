@@ -7,7 +7,6 @@ package moduleinput
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/relux-works/swarma-services/signer/internal/moduleformat"
 
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/sumdb/dirhash"
@@ -224,17 +225,9 @@ func lowerHex(s string, n int) bool {
 	}
 	return true
 }
-func h1(s string) bool {
-	if len(s) != 47 || !strings.HasPrefix(s, "h1:") {
-		return false
-	}
-	b, e := base64.StdEncoding.Strict().DecodeString(s[3:])
-	return e == nil && len(b) == sha256.Size && base64.StdEncoding.EncodeToString(b) == s[3:]
-}
-func identity(p, v string) bool {
-	return len(p) > 0 && len(p) <= MaxPathBytes && utf8.ValidString(p) && len(v) > 0 && len(v) <= MaxVersionBytes && module.CanonicalVersion(v) == v && module.Check(p, v) == nil
-}
-func directory(p, v string) string { return "m/" + sha([]byte(p+"\x00"+v)) }
+func h1(s string) bool             { return moduleformat.ValidH1(s) }
+func identity(p, v string) bool    { return moduleformat.ValidIdentity(p, v) }
+func directory(p, v string) string { return moduleformat.Directory(p, v) }
 
 type sumKey struct{ path, version string }
 

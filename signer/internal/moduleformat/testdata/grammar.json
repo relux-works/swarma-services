@@ -1,0 +1,182 @@
+{
+  "identity_cases": [
+    {
+      "id": "uppercase_component",
+      "path": "example.com/Upper/Lib",
+      "version": "v1.2.3",
+      "expected_valid_identity": true,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence; x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar"
+    },
+    {
+      "id": "prerelease",
+      "path": "example.com/lib",
+      "version": "v1.2.3-rc.1",
+      "expected_valid_identity": true,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence; x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar"
+    },
+    {
+      "id": "pseudo",
+      "path": "example.com/lib",
+      "version": "v0.0.0-20200101000000-000000000000",
+      "expected_valid_identity": true,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence; x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar"
+    },
+    {
+      "id": "incompatible",
+      "path": "example.com/lib",
+      "version": "v2.0.0+incompatible",
+      "expected_valid_identity": true,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence; x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar"
+    },
+    {
+      "id": "major_v2",
+      "path": "example.com/lib/v2",
+      "version": "v2.3.4",
+      "expected_valid_identity": true,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence; x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar"
+    },
+    {
+      "id": "uppercase_domain",
+      "path": "Example.com/lib",
+      "version": "v1.2.3",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence"
+    },
+    {
+      "id": "nonascii_path",
+      "path": "example.com/caf\u00e9",
+      "version": "v1.2.3",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence"
+    },
+    {
+      "id": "no_domain_dot",
+      "path": "std",
+      "version": "v1.0.0",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence"
+    },
+    {
+      "id": "parent_path",
+      "path": "../escape",
+      "version": "v1.0.0",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence"
+    },
+    {
+      "id": "major_mismatch",
+      "path": "example.com/lib/v2",
+      "version": "v1.2.3",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence"
+    },
+    {
+      "id": "missing_v2_suffix",
+      "path": "example.com/lib",
+      "version": "v2.0.0",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CheckPath and CheckImportPath documented ASCII/domain grammar; module.Check documented path-major correspondence"
+    },
+    {
+      "id": "noncanonical_short",
+      "path": "example.com/lib",
+      "version": "v1.2",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar; wire ASCII version requirement"
+    },
+    {
+      "id": "discarded_metadata",
+      "path": "example.com/lib",
+      "version": "v1.2.3+meta",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar; wire ASCII version requirement"
+    },
+    {
+      "id": "nonascii_version",
+      "path": "example.com/lib",
+      "version": "v1.0.0-\u03b2",
+      "expected_valid_identity": false,
+      "basis": "x/mod v0.30.0/module.CanonicalVersion documented canonical semver with special +incompatible preservation; pinned semver package grammar; wire ASCII version requirement"
+    },
+    {
+      "id": "existing_actual_boundary",
+      "path": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "version": "v1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_valid_identity": true,
+      "basis": "Exact existing standard-Go checksum vector index7, path1024/version128; accepted source test fixture and its retained standard-Go records, not a newly synthesized positive"
+    },
+    {
+      "id": "path_over_bound",
+      "path": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea",
+      "version": "v1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_valid_identity": false,
+      "basis": "Explicit MaxPathBytes1024 rule; independently valid exact-bound neighbor is existing vector7"
+    },
+    {
+      "id": "version_over_bound",
+      "path": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "version": "v1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_valid_identity": false,
+      "basis": "Explicit MaxVersionBytes128 rule; independently valid exact-bound neighbor is existing vector7"
+    }
+  ],
+  "h1_cases": [
+    {
+      "id": "canonical_32_zero_bytes",
+      "text": "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "expected_valid_h1": true,
+      "basis": "Standard RFC4648 Base64 of32 zero bytes with h1 prefix;47ASCII bytes and exact canonical re-encoding"
+    },
+    {
+      "id": "wrong_prefix",
+      "text": "h2:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "expected_valid_h1": false,
+      "basis": "Exact h1: prefix required"
+    },
+    {
+      "id": "nonzero_pad_bits",
+      "text": "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB=",
+      "expected_valid_h1": false,
+      "basis": "Strict Base64 canonical zero pad bits and re-encoding required"
+    },
+    {
+      "id": "url_alphabet",
+      "text": "h1:_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "expected_valid_h1": false,
+      "basis": "Standard Base64 alphabet, not URL variant"
+    },
+    {
+      "id": "embedded_newline",
+      "text": "h1:AAAAAAAAAAAAAAAAAAAAA\nAAAAAAAAAAAAAAAAAAAAA=",
+      "expected_valid_h1": false,
+      "basis": "Exact canonical re-encoding equality; CR/LF cannot be ignored as equivalent text"
+    },
+    {
+      "id": "empty",
+      "text": "",
+      "expected_valid_h1": false,
+      "basis": "ValidH1 requires mandatory47-byte form; optional empty module_h1 is a separate record-field rule"
+    },
+    {
+      "id": "wrong_length",
+      "text": "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expected_valid_h1": false,
+      "basis": "Exact47ASCII-byte form required"
+    }
+  ],
+  "directory_cases": [
+    {
+      "path": "example.com/alpha",
+      "version": "v1.0.0",
+      "expected_directory": "m/cc9b3d5cc55385bb26c5cae18e78f1e5d964f7929d5bed0a13487408b88009da",
+      "basis": "Literal expected SHA256(path UTF8 + single NUL + version ASCII), independently computed as one-off requirement analysis; not moduleformat under test"
+    },
+    {
+      "path": "example.com/Upper/Lib",
+      "version": "v1.2.3",
+      "expected_directory": "m/3da265fb67565e8139732c3534dca4f9bc7e0e2019d4a0f16f3bf153c5deaf63",
+      "basis": "Literal expected SHA256(path UTF8 + single NUL + version ASCII), independently computed as one-off requirement analysis; not moduleformat under test"
+    }
+  ],
+  "provenance": "Fixed documented x/mod v0.30.0 grammar expectations; RFC4648 strict Base64; directory literals independently computed from the specified hash domain. Boundary identity is retained standard-Go vector 7 (SHA256 f9e1dd770626b3c21a178febb94a972ad8bf5d2f8298457609f1d29963de4127). The 522-vector source corpus supplies checksum evidence only."
+}

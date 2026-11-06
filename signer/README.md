@@ -20,14 +20,32 @@ Owner, 2026-11-01: «так ты говоришь нет подписи у ку�
 
 ## Implementation status
 
-The independent Go module currently implements `internal/moduleinput`, a pure verifier of supplied module material.
-It takes ordered typed records and file entries, checks finite bounds, copies an immutable snapshot, binds the exact
-source bytes and verifies original `go.sum` anchors and standard Go checksums. It checks every supplied record,
-including records unused by a later build. Returned content has no mutable aliases to caller buffers.
+The independent Go module implements pure packages for unqualified manifest BODY decoding and supplied-module
+verification. `internal/manifestbody` accepts the complete opcode34 JSON body, checks its closed schema and
+finite shape/accounting bounds, and retains owned exact raw bytes with an eagerly computed SHA256. It uses a
+bounded custom tokenizer, validates raw UTF-8 before traversal, and rejects decoded duplicate member names.
+Success returns only `UnqualifiedOpcode34Body`; matching its separately compared raw digest establishes no authority.
+Raw and manifest accessors return independent copies and support concurrent reads. Downstream integration must
+carry the opaque body plus its raw digest, rather than treating mutable `ManifestCopy` fields as trusted input.
 
-A verified supplied subset does not establish source authority, graph completeness or the sufficiency of omitted
-material. Raw manifest parsing, whole-manifest accounting, cache synthesis, production builds, signing and service
-installation remain to be integrated and qualified. There is no service entrypoint or installation command yet.
+`internal/moduleformat` supplies the single identity, canonical h1 and directory derivation predicates under the
+unchanged module pins. `internal/moduleinput` delegates to them while preserving its supplied-subset verifier.
+It binds exact original source bytes, checks original `go.sum` anchors, canonical material/layout, portable
+module-path collisions and both standard Go checksum domains, then publishes an immutable snapshot.
+
+The public decoder admits at most 1,048,576 actual BODY bytes. Entries are nonempty and at most 8,192; receipt
+records are at most 512; regular files are at most 64 MiB and their checked sum at most 1 GiB. Decoded entry paths,
+link targets and module paths are bounded at 1,024 UTF-8 bytes; module versions at 128 ASCII bytes. Source symlink
+size and SHA bind the exact decoded target bytes; regular-file payload hashes, including empty files, belong to a
+later DATA verifier. An unexported capacity seam exists only for explicitly labelled inactive 4 MiB white-box tests.
+There is no public capacity selector or 4 MiB activation. The 8,192/8,193 count pair exceeds the public raw cap.
+
+Body-positive module entry layout and record membership remain unqualified until `moduleinput.Verify` checks
+`Layout`; interior-colon module filenames meet a separate later `Path` refusal. Source Unicode/native equivalence,
+symlink graph/containment, source receipt-to-DATA correspondence, required graph/compiled-content completeness,
+framing/roles/deadlines, acquisition, cache synthesis, resource enforcement, durability, production builds, signing
+and installation remain separate integration and qualification work. There is no service entrypoint or installation
+command. A verified supplied subset does not establish authority, graph completeness or the sufficiency of omissions.
 
 The version 1 design comprises the [baseline](docs/baseline-r5.md),
 [builder and DATA contract](docs/builder-wire-data-r2.md),
@@ -39,27 +57,28 @@ The [open qualification register](../UNRESOLVED_QUESTIONS.md) records the remain
 
 The current admitted manifest limit remains 1 MiB. The proposed 4 MiB limit requires its specified parser,
 headroom and activation checks. The [contract cases](docs/examples/contract-cases-v1.json) and specification
-tables remain declarative expectations. Executable pure-package tests cover only their applicable typed subset;
-they do not establish parser, production build or native isolation qualification.
+tables remain declarative expectations. Executable pure-package tests cover body shape and the applicable supplied-module subset;
+they do not establish production build, whole-input or native isolation qualification.
 
 ## Tools
 
-Use Go 1.24 or newer for development. Dependencies are pinned in this module's `go.mod` and `go.sum`.
+The module requires Go 1.24 or newer; qualification uses its separately admitted exact toolchain and environment.
+Dependencies are pinned in this module's `go.mod` and `go.sum`.
 From the repository root, run each selected lane and inspect every exit code:
 
 ```sh
 mkdir -p .temp/signer-tests
-GOTOOLCHAIN=local go -C signer test -count=1 ./... > .temp/signer-tests/unit.log 2>&1
-GOTOOLCHAIN=local go -C signer test -race -count=1 ./... > .temp/signer-tests/race.log 2>&1
-GOTOOLCHAIN=local go -C signer vet ./... > .temp/signer-tests/vet.log 2>&1
+GOTOOLCHAIN=local GOFLAGS=-mod=readonly go -C signer test -count=1 ./... > .temp/signer-tests/unit.log 2>&1
+GOTOOLCHAIN=local GOFLAGS=-mod=readonly go -C signer test -race -count=1 ./... > .temp/signer-tests/race.log 2>&1
+GOTOOLCHAIN=local GOFLAGS=-mod=readonly go -C signer vet ./... > .temp/signer-tests/vet.log 2>&1
 ```
 
-These commands compile and check the pure package; they do not run a signer or qualify a production toolchain.
-Tests use owned temporary directories for writes and read fixed checksum vectors from `internal/moduleinput/testdata`.
-Go manages its normal module and build caches; the example logs and other temporary project evidence stay in ignored
-`.temp/`.
+These commands compile and check the pure packages; they do not run a signer or qualify a production toolchain.
+Tests use owned temporary directories for writes and read fixed standard-Go checksum vectors from
+`internal/moduleinput/testdata` plus the separately documented grammar corpus in `internal/moduleformat/testdata`.
+Each grammar expectation has a fixed documented or retained standard-Go basis; checksum vectors alone are not a
+complete grammar corpus. Private-capacity tests never count as public admission or source-headroom evidence.
+Use the admitted isolated HOME, TMPDIR, module and build caches with the exact pinned dependency closure.
+Example logs and other temporary project evidence stay in ignored `.temp/`.
 
-Use `git diff --check` from the repository root to check patch whitespace. Python 3 can check that the declarative
-fixture file is valid JSON:
-`mkdir -p .temp && python3 -m json.tool signer/docs/examples/contract-cases-v1.json > .temp/contract-cases-v1.json`.
-That command validates JSON serialization only.
+Use `git diff --check` from the repository root to check patch whitespace.
