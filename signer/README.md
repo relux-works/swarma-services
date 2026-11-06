@@ -40,6 +40,20 @@ size and SHA bind the exact decoded target bytes; regular-file payload hashes, i
 later DATA verifier. An unexported capacity seam exists only for explicitly labelled inactive 4 MiB white-box tests.
 There is no public capacity selector or 4 MiB activation. The 8,192/8,193 count pair exceeds the public raw cap.
 
+Local refusal reasons preserve encounter order rather than globally prioritizing JSON syntax. In an integer
+field, a number-like token such as `1e+` reports `integer_spelling`; in a wrong-type position, the same malformed
+token reports `json_syntax`. Valid JSON fractions and exponents in a wrong-type position report `value_type`;
+they are never admitted integer values. At an array maximum, an extra element beginning like a JSON value
+can report `scalar_bound` before its malformed or truncated contents are parsed, including `,tru`, `,-`, `,1x`,
+`,"abc` and `,{`. Punctuation or EOF immediately after a comma reports `json_syntax`, including at the maximum.
+Tests pin these existing reasons; they do not change the decoder or establish a wire-error precedence policy.
+
+Decoded module directories are checked against their path/version derivation before duplicate-directory lookup.
+A copied directory on a distinct identity therefore reports `receipt_shape`, including escaped aliases; a repeated
+identity reports `module_order_or_duplicate` before that lookup. Reaching the later duplicate-directory map guard
+through otherwise valid public input would require distinct ordered identities with the same SHA-256 derivation.
+That branch remains without practical public-contract coverage; tests do not bypass derivation or invent a collision.
+
 Body-positive module entry layout and record membership remain unqualified until `moduleinput.Verify` checks
 `Layout`; interior-colon module filenames meet a separate later `Path` refusal. Source Unicode/native equivalence,
 symlink graph/containment, source receipt-to-DATA correspondence, required graph/compiled-content completeness,

@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// Public module counts distinguish valid neighbors, punctuation faults and value-start overruns.
 func TestPublicModuleCountPunctuation(t *testing.T) {
 	testArrayCountPunctuation(t, "modules", 512, DecodeOpcode34BodyShape)
 }
@@ -21,6 +22,7 @@ func TestWhiteBoxInactiveCandidateEntryCountPunctuation(t *testing.T) {
 
 func testArrayCountPunctuation(t *testing.T, field string, max int, decode func([]byte) (*UnqualifiedOpcode34Body, error)) {
 	t.Helper()
+	// Complete arrays admit the maximum and refuse one extra element independently of raw size.
 	for _, n := range []int{max - 1, max, max + 1} {
 		t.Run(fmt.Sprintf("count_%d", n), func(t *testing.T) {
 			m := validManifest()
@@ -65,6 +67,7 @@ func testArrayCountPunctuation(t *testing.T, field string, max int, decode func(
 				t.Fatal("array fixture selector not unique")
 			}
 			end := start + len(marker) - 1 // closing array bracket
+			// Punctuation or EOF after a comma is syntax even when the count is already maximal.
 			for _, tc := range []struct{ name, after string }{
 				{"trailing_comma", ","},
 				{"trailing_comma_whitespace", ", \t\r\n"},
@@ -82,6 +85,31 @@ func testArrayCountPunctuation(t *testing.T, field string, max int, decode func(
 					}
 					v, e := decode(raw)
 					checkBad(t, v, e, ReasonJSONSyntax)
+				})
+			}
+			// A value-start byte at the maximum hits the count guard before malformed contents.
+			for _, tc := range []struct {
+				name, token string
+				eof         bool
+			}{
+				{"truncated_true", "tru", true},
+				{"malformed_true", "tru", false},
+				{"truncated_number", "-", true},
+				{"malformed_number", "1x", false},
+				{"truncated_string", `"abc`, true},
+				{"truncated_object", "{", true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					raw := append(bytes.Clone(b[:end]), ("," + tc.token)...)
+					if !tc.eof {
+						raw = append(raw, b[end:]...)
+					}
+					want := ReasonJSONSyntax
+					if n == max {
+						want = ReasonScalarBound
+					}
+					v, e := decode(raw)
+					checkBad(t, v, e, want)
 				})
 			}
 		})

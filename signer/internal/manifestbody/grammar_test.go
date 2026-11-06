@@ -66,6 +66,8 @@ func TestP14P15FixedGrammarConsumer(t *testing.T) {
 		good(t, encoded(t, m))
 	}
 }
+
+// Record fields retain their identity, derived-directory, checksum and byte-order constraints.
 func TestP14P15RecordSemantics(t *testing.T) {
 	for _, field := range []string{"path", "version", "directory"} {
 		m := validManifest()
@@ -117,6 +119,8 @@ func TestP14P15RecordSemantics(t *testing.T) {
 		bad(t, encoded(t, m), ReasonReceiptShape)
 	}
 }
+
+// Every closed local refusal reason has a fixed input-free diagnostic spelling.
 func TestReasonSetDiagnostics(t *testing.T) {
 	reasons := []BodyShapeReason{ReasonBodyTooLarge, ReasonJSONEncoding, ReasonJSONSyntax, ReasonDecodedDuplicateName, ReasonMemberSet, ReasonValueType, ReasonIntegerSpelling, ReasonScalarBound, ReasonIdentifierSyntax, ReasonEntryShape, ReasonPathShape, ReasonEntryOrderOrDuplicate, ReasonModuleOrderOrDuplicate, ReasonReceiptShape, ReasonDeclaredBytesInconsistent, ReasonRawDigestMismatch, ReasonResultAbsent}
 	expected := []string{"body_too_large", "json_encoding", "json_syntax", "decoded_duplicate_name", "member_set", "value_type", "integer_spelling", "scalar_bound", "identifier_syntax", "entry_shape", "path_shape", "entry_order_or_duplicate", "module_order_or_duplicate", "receipt_shape", "declared_bytes_inconsistent", "raw_digest_mismatch", "result_absent"}

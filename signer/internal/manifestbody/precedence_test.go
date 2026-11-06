@@ -31,6 +31,8 @@ func TestLexicalAndEncounterPrecedence(t *testing.T) {
 	bad(t, []byte(`{"entries":[{"root":"source","unknown":`), ReasonMemberSet)
 	bad(t, []byte(`{"module_receipt":{"modules":[{"path":"example.com/a","unknown":`), ReasonMemberSet)
 }
+
+// Entry and module arrays reject complete non-object elements as value types.
 func TestArrayElementTypes(t *testing.T) {
 	for _, value := range []any{nil, true, "text", uint64(1), []any{}} {
 		m := validManifest()
@@ -41,6 +43,8 @@ func TestArrayElementTypes(t *testing.T) {
 		bad(t, encoded(t, m), ReasonValueType)
 	}
 }
+
+// Canonical integer accumulation admits MaxInt64 and refuses its immediate overflow neighbor.
 func TestCanonicalIntegerAccumulator(t *testing.T) {
 	p := parser{raw: []byte("9223372036854775807")}
 	if got := p.number(); got != 9223372036854775807 || p.err != nil {
@@ -52,6 +56,8 @@ func TestCanonicalIntegerAccumulator(t *testing.T) {
 		t.Fatal("overflow classification")
 	}
 }
+
+// Permitted name/order/whitespace encodings preserve fields while retaining distinct raw digests.
 func TestRawEncodingVariations(t *testing.T) {
 	base := encoded(t, validManifest())
 	original := good(t, base)
@@ -112,6 +118,7 @@ func TestDecodedDuplicateGuard(t *testing.T) {
 	})
 }
 
+// A canonical integer followed by invalid object punctuation reports JSON syntax.
 func TestBrokenPunctuationAfterCanonicalInteger(t *testing.T) {
 	for _, raw := range []string{
 		`{"version":1:2}`, `{"version":1{}`, `{"version":1[`, `{"version":1"extra":0}`,

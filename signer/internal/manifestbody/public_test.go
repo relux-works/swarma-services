@@ -17,6 +17,8 @@ func publicFixture(n int) []byte {
 	// Pad inside the top-level object, without reserializing any fields.
 	return append(append(append([]byte(nil), b[:1]...), bytes.Repeat([]byte{' '}, n-len(b))...), b[1:]...)
 }
+
+// The public 1 MiB cap admits exact-bound raw bytes and refuses oversize before encoding checks.
 func TestPublicActiveBodyLength(t *testing.T) {
 	if mb.MaxOpcode34BodyBytes != 1048576 {
 		t.Fatal("active_body_length: constant changed")

@@ -84,6 +84,8 @@ func checkBad(t *testing.T, v *UnqualifiedOpcode34Body, e error, want BodyShapeR
 		t.Fatalf("intended %s; body=%v error=%v", want, v != nil, e)
 	}
 }
+
+// Each object shape requires every named member, rejects extras and refuses wrong value types.
 func TestP03ExactSchema(t *testing.T) {
 	for _, level := range []string{"manifest", "entry", "receipt", "record"} {
 		build := func() (object, object) {
@@ -125,6 +127,8 @@ func TestP03ExactSchema(t *testing.T) {
 		t.Run(level+"/extra", func(t *testing.T) { m, o := build(); o["extra"] = true; bad(t, encoded(t, m), ReasonMemberSet) })
 	}
 }
+
+// Literal and escaped duplicate names refuse before their unwalked values at each object level.
 func TestP04DecodedMemberDuplicate(t *testing.T) {
 	m := validManifest()
 	withRecord(m)
@@ -157,6 +161,7 @@ func TestP04DecodedMemberDuplicate(t *testing.T) {
 func TestP05P06UnicodeAndEnvelope(t *testing.T) {
 	base := string(encoded(t, validManifest()))
 	pathBody := func(token string) []byte { return []byte(strings.Replace(base, `"path":"go.mod"`, `"path":`+token, 1)) }
+	// Valid UTF-8 and escape spellings decode, while unpaired surrogates and broken escapes refuse.
 	for _, token := range []string{`"café"`, `"caf\u00e9"`, `"\ud83d\ude00"`, `"�"`, `"\ufffd"`, `"x\ufeff"`, `"dir\/file"`} {
 		good(t, pathBody(token))
 	}
@@ -166,6 +171,7 @@ func TestP05P06UnicodeAndEnvelope(t *testing.T) {
 	for _, token := range []string{`"\q"`, `"\u12x4"`, "\"raw\ncontrol\""} {
 		bad(t, pathBody(token), ReasonJSONSyntax)
 	}
+	// Invalid raw UTF-8, BOMs, trailing bytes and broken envelopes retain their local reasons.
 	for _, b := range [][]byte{{0xff}, {0xc0, 0xaf}, {0xe2, 0x82}} {
 		bad(t, append([]byte(`{"unknown":0} `), b...), ReasonJSONEncoding)
 	}
@@ -178,6 +184,7 @@ func TestP05P06UnicodeAndEnvelope(t *testing.T) {
 	for _, b := range []string{"", " ", base[:len(base)-1], `{"version"`, `{"version":1,}`, `{version:1}`} {
 		bad(t, []byte(b), ReasonJSONSyntax)
 	}
+	// Complete primitive or array bodies are wrong types; surrounding JSON whitespace is permitted.
 	for _, b := range []string{`[]`, `[1]`, `null`, `true`, `"text"`, `1`, `1.0`, `-1`} {
 		bad(t, []byte(b), ReasonValueType)
 	}
@@ -187,6 +194,8 @@ func TestP05P06UnicodeAndEnvelope(t *testing.T) {
 	m["entries"] = []any{entry("A"), entry("a"), entry("é"), entry("é")}
 	good(t, encoded(t, m))
 }
+
+// Integer fields distinguish canonical spelling, value type, overflow and field-specific bounds.
 func TestP07IntegerTokens(t *testing.T) {
 	base := string(encoded(t, validManifest()))
 	for _, field := range []string{"version", "size", "data_bytes"} {
@@ -211,6 +220,8 @@ func TestP07IntegerTokens(t *testing.T) {
 	}
 	good(t, []byte(base))
 }
+
+// Every identifier requires its exact lowercase-hex byte width.
 func TestP08Identifiers(t *testing.T) {
 	for _, field := range []string{"operation_id", "transfer_id", "commit", "tree", "policy_sha256", "recipe_sha256", "toolchain_sha256", "sha256", "source_go_mod_sha256", "source_go_sum_sha256"} {
 		for _, fault := range []string{"short", "long", "uppercase", "nonhex", "unicode"} {
@@ -243,6 +254,8 @@ func TestP08Identifiers(t *testing.T) {
 		}
 	}
 }
+
+// Entry roots and kinds admit only the specified string mode pairs.
 func TestP09ModePairs(t *testing.T) {
 	for _, root := range []string{"source", "modules"} {
 		for _, kind := range []string{"file", "symlink"} {
@@ -278,6 +291,8 @@ func TestP09ModePairs(t *testing.T) {
 		}
 	}
 }
+
+// Decoded entry paths obey byte bounds and relative segment rules without normalization.
 func TestP10EntryPaths(t *testing.T) {
 	for _, path := range []string{"dir/file", "dir/C:peer", "dir/a:b", "1:peer", ":peer", "é:peer", "file:foo", "percent%2fpath", "quoted\"name", "line\nname", ".info", "asset.tar.gz", strings.Repeat("x", 1024), strings.Repeat("é", 512)} {
 		m := validManifest()
@@ -298,6 +313,8 @@ func TestP10EntryPaths(t *testing.T) {
 	}
 	good(t, []byte(strings.Replace(base, `go.mod`, `dir\/\u0066ile`, 1)))
 }
+
+// Entries sort by decoded root/path bytes and reject duplicate paths, including escaped aliases.
 func TestP11EntryOrder(t *testing.T) {
 	m := validManifest()
 	a, b := entry("a"), entry("a")
@@ -318,6 +335,7 @@ func TestP11EntryOrder(t *testing.T) {
 	bad(t, []byte(strings.Replace(raw, `"path":"b"`, `"path":"\u0061"`, 1)), ReasonEntryOrderOrDuplicate)
 }
 func TestP16P17P18BoundsAndSum(t *testing.T) {
+	// A regular file admits exactly 64 MiB and refuses the next byte.
 	m := validManifest()
 	first(m)["size"] = uint64(67108864)
 	m["data_bytes"] = uint64(67108864)
@@ -325,6 +343,7 @@ func TestP16P17P18BoundsAndSum(t *testing.T) {
 	first(m)["size"] = uint64(67108865)
 	m["data_bytes"] = uint64(67108865)
 	bad(t, encoded(t, m), ReasonScalarBound)
+	// The checked running file sum admits 1 GiB and refuses overflow before later schema faults.
 	m = validManifest()
 	es := []any{}
 	for i := 0; i < 16; i++ {
@@ -344,12 +363,14 @@ func TestP16P17P18BoundsAndSum(t *testing.T) {
 	raw := string(encoded(t, m))
 	raw = raw[:len(raw)-1] + `,"unknown":0}`
 	bad(t, []byte(raw), ReasonScalarBound)
+	// Declared DATA bytes have an independent bound and must equal the regular-file sum.
 	m = validManifest()
 	m["data_bytes"] = uint64(1073741825)
 	bad(t, encoded(t, m), ReasonScalarBound)
 	m = validManifest()
 	m["data_bytes"] = uint64(1)
 	bad(t, encoded(t, m), ReasonDeclaredBytesInconsistent)
+	// Symlink target bytes do not contribute to the streamed regular-file sum.
 	m = validManifest()
 	e = first(m)
 	e["kind"] = "symlink"
@@ -373,6 +394,7 @@ func TestP19TargetShapeAndHash(t *testing.T) {
 		e["sha256"] = digest([]byte(target))
 		return m
 	}
+	// Target shape admits bounded relative text without claiming symlink graph containment.
 	for _, target := range []string{"peer", "./peer", "../peer", "C:peer", "C:/peer", "a//b", "é", strings.Repeat("x", 1024)} {
 		good(t, encoded(t, link(target)))
 	}
@@ -380,6 +402,7 @@ func TestP19TargetShapeAndHash(t *testing.T) {
 		bad(t, encoded(t, link(target)), ReasonPathShape)
 	}
 	bad(t, encoded(t, link(strings.Repeat("x", 1025))), ReasonScalarBound)
+	// Only symlinks carry targets, with size and lowercase SHA bound to exact decoded target bytes.
 	m := validManifest()
 	first(m)["link_target"] = "peer"
 	bad(t, encoded(t, m), ReasonEntryShape)
@@ -397,6 +420,7 @@ func TestP19TargetShapeAndHash(t *testing.T) {
 	good(t, []byte(strings.Replace(raw, `"link_target":"peer"`, `"link_target":"\u0070eer"`, 1)))
 }
 func TestP20P21RawOwnershipAndNil(t *testing.T) {
+	// Stored digests bind the exact raw encoding and reject a different permitted encoding's digest.
 	m := validManifest()
 	withRecord(m)
 	raw := encoded(t, m)
@@ -420,6 +444,7 @@ func TestP20P21RawOwnershipAndNil(t *testing.T) {
 	if e := v.CompareExpectedRawSHA256Only(otherHash); !errors.As(e, &r) || r.Reason != ReasonRawDigestMismatch {
 		t.Fatal("wrong digest accepted")
 	}
+	// Caller and accessor mutations cannot change retained raw bytes or manifest fields.
 	raw[0] = 'x'
 	copyRaw := v.RawBodyCopy()
 	copyRaw[0] = 'x'
@@ -429,6 +454,7 @@ func TestP20P21RawOwnershipAndNil(t *testing.T) {
 	if !bytes.Equal(v.RawBodyCopy(), original) || !reflect.DeepEqual(v.ManifestCopy(), w.ManifestCopy()) {
 		t.Fatal("mutable alias")
 	}
+	// Concurrent copy and digest reads observe immutable stored state.
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -445,6 +471,7 @@ func TestP20P21RawOwnershipAndNil(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	// Nil and zero bodies expose no content or digest and refuse digest comparison as absent.
 	for _, absent := range []*UnqualifiedOpcode34Body{nil, {}} {
 		if absent.RawBodyCopy() != nil || absent.ManifestCopy() != nil {
 			t.Fatal("absent copy")
@@ -457,6 +484,7 @@ func TestP20P21RawOwnershipAndNil(t *testing.T) {
 			t.Fatal("absent comparison")
 		}
 	}
+	// Invalid or caller-made refusal reasons never echo arbitrary diagnostic text.
 	for _, e := range []*BodyShapeRefusal{nil, {}, {BodyShapeReason("private input text")}} {
 		if e.Error() != "input_invalid" {
 			t.Fatal("unsafe diagnostic")

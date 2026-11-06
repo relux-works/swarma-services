@@ -60,6 +60,8 @@ func TestWhiteBoxInactiveCandidateEntryCount(t *testing.T) {
 	m["entries"] = []any{}
 	bad(t, encoded(t, m), ReasonScalarBound)
 }
+
+// Public receipt arrays admit zero through 512 records and refuse 513 below the raw cap.
 func TestP13ModuleCount(t *testing.T) {
 	for _, n := range []int{0, 512, 513} {
 		m := validManifest()
