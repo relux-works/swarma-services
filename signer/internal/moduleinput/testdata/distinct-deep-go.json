@@ -1,0 +1,10 @@
+{
+  "Count": 129,
+  "Depth": 64,
+  "GoMod": "module example.com/distinct-deep\n\ngo 1.24.0\n",
+  "Path": "example.com/distinct-deep",
+  "Version": "v1.0.0",
+  "GoModH1": "h1:7n/vIqM1zxGYRWMSzFQ+N8pDgCnqpTjWdXEWD73+EFY=",
+  "ModuleH1": "h1:0G0OouEGf9IxvsTHKYBKuQ/Ib5fxCbMZh1RWm829fDQ=",
+  "Provenance": "Independent archive generation, standard Go 1.25.5 go mod download -json, file proxy and fresh private cache; generator never imports moduleinput or computes h1."
+}

@@ -24,7 +24,7 @@ func BenchmarkCollisionSharedAncestors(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		seen := collisionSet{folded: make(map[string]node), exact: make(map[string]bool)}
+		seen := collisionSet{}
 		for _, p := range paths {
 			if !seen.check(p) {
 				b.Fatal("valid shared ancestor refused")

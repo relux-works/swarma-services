@@ -12,7 +12,7 @@ import (
 // not qualify raw decoding, full case folding or native filesystem behavior.
 func TestCollisionDeepAliasesAndNeighbors(t *testing.T) {
 	prefix := "m/" + strings.Repeat("0", 64) + "/" + strings.Repeat("a/", 256)
-	fresh := func() collisionSet { return collisionSet{folded: make(map[string]node), exact: make(map[string]bool)} }
+	fresh := func() collisionSet { return collisionSet{} }
 	t.Run("legitimate_shared_siblings", func(t *testing.T) {
 		seen := fresh()
 		for i := 0; i < MaxFiles; i++ {

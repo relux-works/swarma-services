@@ -32,6 +32,8 @@ carry the opaque body plus its raw digest, rather than treating mutable `Manifes
 unchanged module pins. `internal/moduleinput` delegates to them while preserving its supplied-subset verifier.
 It binds exact original source bytes, checks original `go.sum` anchors, canonical material/layout, portable
 module-path collisions and both standard Go checksum domains, then publishes an immutable snapshot.
+The collision index uses bounded segment keys; its [resource contract](docs/moduleinput-resources.md)
+describes the algorithmic bound and the native caller budgets still required before integration.
 
 The public decoder admits at most 1,048,576 actual BODY bytes. Entries are nonempty and at most 8,192; receipt
 records are at most 512; regular files are at most 64 MiB and their checked sum at most 1 GiB. Decoded entry paths,

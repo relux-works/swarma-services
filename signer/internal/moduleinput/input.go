@@ -297,7 +297,7 @@ func verify(s *snapshot) error {
 		claimed[r.Directory] = i
 	}
 	groups := make([][]File, len(in.Records))
-	collisions := collisionSet{folded: make(map[string]node), exact: make(map[string]bool)}
+	var collisions collisionSet
 	s.fileHashes = make([]string, len(in.Files))
 	for i, f := range in.Files {
 		if !validPath(f.Path) {
@@ -340,11 +340,6 @@ func validPath(p string) bool {
 	return p != "" && len(p) <= MaxPathBytes && utf8.ValidString(p) && !strings.ContainsAny(p, "\x00\\") && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != "." && p != ".." && !strings.HasPrefix(p, "../") && module.CheckFilePath(p) == nil
 }
 
-type node struct {
-	path string
-	file bool
-}
-
 // This portable collision predicate rejects Unicode case and canonical
 // decomposition aliases without changing stored names. Actual Darwin volume
 // behavior and materialization still require native integration qualification.
@@ -360,29 +355,63 @@ func fold(p string) string {
 	}, norm.NFD.String(p))
 }
 
-// collisionSet belongs to one Verify call. An exact directory already admitted
-// has admitted ancestors too, so a later visit can stop without folding again.
-// Both indexes retain at most the nodes implied by the bounded input paths.
+// collisionSet is a segment trie belonging to one Verify call. Slash is an
+// NFD normalization boundary and is unchanged by simple folding, so folded
+// segment chains have exactly the same equivalence as folded full ancestors.
+// Interned segment IDs avoid retaining or re-folding complete ancestor keys.
+// After a refusal the set is poisoned: partially inserted state is abort-only.
 type collisionSet struct {
-	folded map[string]node
-	exact  map[string]bool // true for a file, false for an implied directory
+	segments map[string]segmentIDs
+	folds    map[string]uint32
+	edges    map[collisionEdge]collisionNode
+	rejected bool
 }
 
-func (seen collisionSet) check(p string) bool {
-	for q := p; q != "."; q = path.Dir(q) {
-		isFile := q == p
-		if file, ok := seen.exact[q]; ok {
-			return !file && !isFile
+type segmentIDs struct{ exact, folded uint32 }
+type collisionEdge struct{ parent, folded uint32 }
+type collisionNode struct {
+	id, exact uint32
+	file      bool
+}
+
+func (seen *collisionSet) check(p string) bool {
+	if seen.rejected {
+		return false
+	}
+	if seen.edges == nil {
+		seen.segments = make(map[string]segmentIDs)
+		seen.folds = make(map[string]uint32)
+		seen.edges = make(map[collisionEdge]collisionNode)
+	}
+	var parent uint32
+	for rest := p; rest != ""; {
+		segment, tail, more := strings.Cut(rest, "/")
+		isFile := !more
+		ids, ok := seen.segments[segment]
+		if !ok {
+			key := fold(segment)
+			folded, found := seen.folds[key]
+			if !found {
+				folded = uint32(len(seen.folds) + 1)
+				seen.folds[key] = folded
+			}
+			ids = segmentIDs{uint32(len(seen.segments) + 1), folded}
+			seen.segments[segment] = ids
 		}
-		key := fold(q)
-		if old, ok := seen.folded[key]; ok {
-			if old.path != q || old.file || isFile {
+		key := collisionEdge{parent, ids.folded}
+		n, found := seen.edges[key]
+		if found {
+			if n.exact != ids.exact || n.file || isFile {
+				seen.rejected = true
 				return false
 			}
 		} else {
-			seen.folded[key] = node{q, isFile}
+			// Verify's canonical paths imply at most MaxFiles *
+			// ((MaxPathBytes+1)/2) nodes, well below the uint32 ID limit.
+			n = collisionNode{uint32(len(seen.edges) + 1), ids.exact, isFile}
+			seen.edges[key] = n
 		}
-		seen.exact[q] = isFile
+		parent, rest = n.id, tail
 	}
 	return true
 }
