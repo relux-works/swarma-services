@@ -1,0 +1,56 @@
+# Signing audit component candidate
+
+ It adds no executable, controller, service entrypoint, native bridge or production activation. The normative reading order is baseline-r5, builder-wire-data-r2, manifest-capacity-r3, integrated-addendum-r2 and the open agreement register. Later finite-protocol and operation-history rules control the earlier synchronous prose.
+
+`internal/signingaudit` enforces local acceptance/intent/outcome ordering and replay with explicitly injected `TrustMetadata`, `Signer`, `Reconciler`, `Releaser` and `Durability` interfaces. It imports only the standard library. These interfaces are custody boundaries, not implementations of source authority, native signing, artifact immutability or host isolation. Unit 305 owns source authority. No caller binary, path, command, credential or key is accepted by this API.
+
+## Operation contract
+
+`Accept` durably records authenticated caller-scoped acceptance. Matching retries return the existing operation without trust calls, builds or signing; changed semantic requests or exact input/policy/authority bindings return `request_conflict`. A different request while an operation is active returns `busy`. No implicit queue exists. Upstream must authenticate/decode/admit the request and retain the exact verified inputs before calling this package. No unparsed client connection acquires this gate.
+
+`Run` is an explicit once-only continuation, never a retry handler. It rechecks current trust, durably appends intent, then enters the injected signer. Any error, cancellation, invalid signature metadata or panic after signer entry leaves the operation uncertain. Only a verified result followed by a successful outcome flush yields historical success. `Run` returns metadata and releases no bytes. Pre-sign trust refusal becomes terminal only after its refusal record is durable.
+
+`Inspect` is side-effect free and hides foreign caller IDs. `Fetch` requires historical success, independently verifies stored bytes through `Releaser.Verify`, then rechecks current trust immediately before `Release`. Every fetch has fresh trust calls; no lease is reused by this component after restart or clock movement. The injected verifier must apply the agreed zero-future-tolerance, maximum-300-second lease, trusted clock, current admission/revocation and exact-source/policy rules. The injected releaser must preserve immutable custody between verification and transfer and enforce the absolute transfer deadline. Historical success survives later fetch refusal. A release callback error may mean partial transfer; it never triggers another signature.
+
+`Reconcile` never calls the signer. It requires current trust plus an injected verifier that establishes prior child cleanup and verifies existing private staging, source bindings, native identity and final bytes. Only verified positive evidence permits an append-only recovery outcome. Missing staging is uncertainty, not proof of absent signing. Unknown cleanup, timeout, unavailable trust or failed verification retains the active gate. A persisted pre-intent acceptance can be explicitly continued after a clean replay; a persisted intent cannot.
+
+Inputs bind exact source commit/tree, stored policy, recipe, full toolchain identity, raw retained manifest/job digests, retained authority projection digest, unsigned snapshot hash/size, certificate DER hash and requirement-blob hash. The component validates finite syntax and compares all these stored values on retries. It does not infer source or policy truth from a digest. Actual input bytes and authenticated projections remain upstream custody requirements. Returned operations are value copies.
+
+## Bounded local format proposal
+
+The contract does not freeze an audit encoding, qualified host primitive or torn-tail continuation authorization. The following is a local candidate format for review, not an additional wire schema or unstated custody authority.
+
+The existing signer-private directory must be owned by the effective UID and exactly 0700. A directory-descriptor advisory exclusive nonblocking lock permits one cooperating writer. The journal is one 0600 ordinary, single-link, owner-matching file opened under `os.Root` with no-follow and identity checks. Directory symlinks, journal symlinks/hardlinks, permissive modes, unknown entries and unsupported special files refuse. Ancestor custody and protection from hostile same-UID/root writers remain external requirements; advisory locking does not provide OS-enforced immutability.
+
+`0000000000000001.journal` begins with a version/profile/budget header. Each frame is uint32 big-endian length followed by at most 16384 exact canonical Go-JSON bytes. The local decoder requires byte equality with the writer's canonical encoding, rejecting duplicates, aliases, unknown fields, nulls and alternate spellings. This local format rule does not constrain legitimate raw JSON encodings in manifest34 or the client protocol. No shared wire encoder is added.
+
+Each record binds schema 1, monotonically increasing sequence (starting at 1, maximum 9223372036854775807), predecessor digest, transition kind and the complete operation. Its SHA-256 domain is `swarma-signingaudit-record-v1` followed by NUL and the exact record JSON with `Digest` empty. The first predecessor is the empty string. Outcome receipts identify the actual outcome/recovery sequence and digest. Replay independently validates canonical bytes, chains, exact input continuity, unique caller/request and operation identities, legal transitions and single-flight ordering; an intact hash chain alone cannot authorize an illegal transition.
+
+The header stores the explicitly selected durability profile and storage budget. A different profile or budget refuses replay. Creation writes the header, flushes the file, then flushes its parent directory before acceptance is available. Every append uses one checked append write and a successful file flush before advancing trusted state. Any write, short-write or flush failure poisons that instance without retrying the append. A fresh replay reestablishes file and directory persistence before enabling effects, including complete records left by an earlier failed flush. Staging publication belongs to the injected release implementation and may occur only after this outcome boundary.
+
+A complete malformed/corrupt record refuses opening without modifying history. An incomplete final header/body preserves every predecessor byte and creates a linked second segment `0000000000000002.journal` containing a bounded seal: complete predecessor hash/size and last valid sequence/digest. The new segment receives file and directory flushes. Reopening verifies that full link. All signing, reconciliation and release remain disabled after a torn tail, even if an earlier operation succeeded. This candidate intentionally provides no automatic tail continuation: the custodian must agree the missing evidence/continuation protocol first. A torn initial format header or damaged seal refuses rather than guessing.
+
+The aggregate journal/seal budget is at most the agreed 2 GiB audit+idempotency allocation, with smaller private fixture budgets permitted. Before acceptance, space is reserved for five maximum-size frames; bounded operation transitions cannot consume another operation's reservation. Replay limits frame allocation before reading and rejects over-budget files. Request-index memory is bounded by the retained journal budget. No pruning, deletion, checkpoint replacement or automatic retry-horizon expiry exists. The workspace/artifact/log/APFS-free-floor budgets are upstream enforcement requirements and are not claimed here.
+
+An independently retained `Options.Checkpoint` detects rollback before or across its sequence/digest. The zero anchor explicitly records absence of such custody; coherent rollback after the last retained checkpoint is undetectable by this local log. This adds no synchronous external-checkpoint-before-every-release gate. External sink custody and its qualification remain with the service custodian.
+
+## Source fixture claims
+
+Each following line names the cohesive test group and its bounded claim; execution receipts are supplied separately and must bind the exact candidate.
+
+| Test group | Claim |
+| --- | --- |
+| OrderingRetryFetchAndReplay; ReleaseRequiresDurableOutcome; ChangedSemanticInputsAndPolicyConflict | Real file/flush boundaries precede fake signing/release; exact retries preserve stored inputs and historical receipts without signing again. |
+| ConcurrentSingleFlightAndInspection; ConcurrentDoubleAcceptance | Actual concurrent goroutines deduplicate matching requests and refuse different active requests and duplicate continuation without queuing. |
+| IntentAndOutcomeFlushFailures; WriteFailuresAndPoisonedWriter | Injected append/short-write/file-flush failures prevent signer entry or withhold release and poison the writer. |
+| UncertainRecoveryNeverResigns; MissingRecoveryArtifactHoldsGate; UncertainOperationCannotReenterSigner; SignerPanicPreservesUncertainty | Intent-only replay retains the gate; verified recovery appends, while missing evidence and signer panic never authorize another signature. |
+| CurrentTrustAndArtifactRefusalPreserveHistory; PresignRefusalAndCancellation; CancellationAfterPossibleSignatureAndWrongPin | Trust changes, invalid bytes, cancellation and wrong certificate metadata refuse their applicable effects while retaining truthful history. |
+| JournalChainReceiptAndCheckpoint; WrongCheckpointAndPolicyProfileRefuse; CorruptJournalRefusesWithoutRewriting | Sequences/digests/receipts, anchored rollback detection, canonical format and legal transitions are checked on replay. |
+| PartialTailPreservedSealedAndHeld | Incomplete final headers/bodies are preserved, linked/sealed and held; altered sealed predecessors refuse. |
+| ExclusiveWriterAndFilesystemCustody; JournalSymlinkHardlinkAndPermissionsRefuse | Cooperating writer exclusion and actual local mode/link custody refusals work in private fixtures. |
+| CreationReplayAndDirectoryFlushFailures; BoundedStorageRefusesBeforeNewEffects; ConfigurationAndInputBounds | Directory-persistence errors, unavailable profiles, finite budgets and invalid input bounds refuse before new effects without pruning. |
+| ProcessKillRetainsIntentAndRecoversWithoutSigning | A bounded real helper process is killed after fake-sign staging; replay remains uncertain and recovery does not reenter signing. |
+
+All signatures and authority decisions in these tests are synthetic. Fixtures perform actual local writes, fsyncs and reads, with bounded fault injection and process control. A process kill is not power-loss proof. Linux fsync fixtures do not qualify Darwin/APFS, F_FULLFSYNC, native signature verification, separate-UID isolation, a foreign-UID fixture or a production durability profile. Darwin/arm64 compile/vet is compilation/analysis only; actual owner Mac qualification remains external.
+
+The candidate requires independent Muse review and the unit's Meta/Vega/Maia signed-delivery route. It is not acceptance, a live grant, source admission, a configured checkpoint sink, runtime adoption or permission for production/key/provider operations.
