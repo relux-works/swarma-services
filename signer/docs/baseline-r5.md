@@ -7,9 +7,11 @@ Read this baseline with [builder/DATA](builder-wire-data-r2.md), [capacity](mani
 ## Review and receipt rules
 
 Product review records carry the exact head, verdict and neutral verdict-body SHA256; messaging room, event and sender provenance remains outside product records.
-The configured authenticated Matrix reviewer must differ from the authenticated producer and bind the exact head and pull request. The lookup interval is 24 hours before to 300 seconds after the platform-review time. Require complete per-scope frontier coverage, exactly one digest match and a 30-second budget. Zero or multiple matches, partial/truncated/deadline/unknown coverage refuse. Future events and atomic cross-scope snapshots are not claimed. Private journals retain minimum provenance; product receipts expose none.
+The configured authenticated Matrix reviewer must differ from the authenticated producer and bind the exact head and pull request. The lookup interval is 24 hours before to 300 seconds after the platform-review time. Require complete per-scope frontier coverage, exactly one digest match and a 30-second budget. Unknown-scope discovery and substring trust are forbidden. Zero or multiple matches, partial/truncated/deadline/unknown coverage refuse. Future events and atomic cross-scope snapshots are not claimed. Private journals retain minimum provenance; product receipts expose none.
 Module receipts contain actual inline original source mod/sum hashes, bounded path/version/checksum/directory records and streamed dependency content. Original source go.sum verification and offline closure are required; cache-integrity self-checks cannot replace them.
-The first client is the core tool. Owner presence applies only to first allowlist admission; later qualified releases are autonomous. The commit-derived label, separate credential adapter, signer and keyless builder, P-256, audit/recovery and current fetch gates remain required.
+The first client is the core tool. For tools that hold or bind secrets, owner presence applies only to first allowlist admission; later qualified releases are autonomous. The commit-derived label, separate credential adapter, signer and keyless builder, P-256, audit/recovery and current fetch gates remain required.
+
+The baseline's 52 declarative expectations comprise 13 request, 17 authority, 15 DATA and 7 module cases. JSON serialization, links and whitespace are checked only; these expectations are not executable parser, runtime or security tests.
 
 ---
 
