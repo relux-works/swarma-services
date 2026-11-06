@@ -15,6 +15,8 @@ Owner decision, 2026-11-01: «давай сделаем проект сварм�
 
 - [shell-out](shell-out/README.md): manual private shell output capture, bounded previews and stable references.
 
+- [pktscan](pktscan/README.md): bounded packet extraction and ERE scanning with counts-only output.
+
 ## Tools
 
 Git manages source history. Run `git diff --check` to check a patch for whitespace errors. Temporary evidence and
