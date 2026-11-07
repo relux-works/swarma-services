@@ -2,7 +2,7 @@
 
 The explicit GitHub route composes native policy, signed original review
 binding, bounded REST inventory correlation, and a mandatory protected GraphQL
-acquisition seam. The former unconditional history refusal is removed. The
+POST implementation. The former unconditional history refusal is removed. The
 constructor rejects a generic Source or a source without the GraphQL reader.
 
 The source discovers exactly one signed original in the bounded current PR
@@ -41,7 +41,13 @@ existing journal/native-trust composition with the Matrix-only
 `OpenAuditedSigner`; empty Matrix fields still refuse through the latter.
 The new constructor does not supply the missing production acquisition ports.
 
-Tests use synthetic TLS REST and in-memory signed GraphQL controls only. No
+`OpenProtectedGitHubPRSource` binds the protected installed policy and accepted
+digest, membership, exact Git-object and effective-check ports, opaque service
+auth and an owned canonical connector. The production auth/address issuers and
+concrete membership/Git/check readers remain missing; this is PARTIAL source,
+not provider readiness. See [the work packet](github-provider-work-packet.md).
+
+Tests use synthetic canonical-host TLS REST/GraphQL and signed controls only. No
 live qualified provider, GitHub mutation, reviewer key custody, policy install,
 native run or first run is claimed. A real provider installation still needs
 qualified acquisition and its externally accepted exact policy digest. The native

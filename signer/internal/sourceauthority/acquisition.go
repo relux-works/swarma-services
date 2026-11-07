@@ -50,7 +50,15 @@ type acquisitionInstallation struct {
 	endpoints        map[string]acquisitionEndpoint
 	limits           acquisitionLimits
 	// Optional public CA roots, owned by installation. Nil uses system TLS roots.
-	roots *x509.CertPool
+	roots     *x509.CertPool
+	connector acquisitionConnector
+	auth      *GitHubInstallationAuth
+}
+
+// connect must return only after all resolution/dial work and cancellation
+// callbacks have joined. This private port cannot be supplied by a request.
+type acquisitionConnector interface {
+	connect(context.Context, string, string) (net.Conn, error)
 }
 type installedEndpoint struct {
 	url  string
@@ -66,6 +74,8 @@ type sourceAcquisition struct {
 	limits    acquisitionLimits
 	roots     *x509.CertPool
 	busy      atomic.Bool
+	connector acquisitionConnector
+	auth      *GitHubInstallationAuth
 }
 
 func newSourceAcquisition(c acquisitionInstallation) (*sourceAcquisition, error) {
@@ -81,6 +91,7 @@ func newSourceAcquisition(c acquisitionInstallation) (*sourceAcquisition, error)
 		return nil, unavailable("acquisition_configuration")
 	}
 	a := &sourceAcquisition{provider: c.provider, limits: l, endpoints: make(map[string]installedEndpoint, len(c.endpoints))}
+	a.connector, a.auth = c.connector, c.auth
 	if c.roots != nil {
 		a.roots = c.roots.Clone()
 	}
@@ -206,6 +217,10 @@ type acquiredResponse struct {
 // reservations from its trusted component. No URL/header/client is accepted.
 // A failed transfer poisons this phase; no automatic or caller retry follows.
 func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) (out acquiredResponse, err error) {
+	return p.acquireRequest(endpoint, bodyLeft, headerLeft, nil)
+}
+
+func (p *acquisitionPhase) acquireRequest(endpoint string, bodyLeft, headerLeft int64, graphqlBody []byte) (out acquiredResponse, err error) {
 	if p == nil {
 		return out, unavailable("acquisition_unavailable")
 	}
@@ -218,6 +233,15 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 	p.active = true
 	p.responsesLeft-- // Attempts, including errors, consume the finite inventory.
 	limit := p.source.limits.metadata
+	if graphqlBody != nil {
+		if endpoint != "graphql" || e.url != "https://api.github.com/graphql" || len(graphqlBody) > 2048 || p.source.auth == nil {
+			p.active = false
+			p.failed = true
+			p.mu.Unlock()
+			return out, unavailable("github_graphql_configuration")
+		}
+		limit = min(limit, int64(MaxReviewCommentBytes+16384))
+	}
 	if e.kind == rawCommitResponse {
 		limit = p.source.limits.commit
 	}
@@ -243,45 +267,70 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 
 	// Own the single socket and all cancellation work. No Transport dial,
 	// persistConn, pooling, retry, proxy or TLS worker can outlive this call.
-	req, makeErr := http.NewRequest(http.MethodGet, e.url, nil)
+	method := http.MethodGet
+	if graphqlBody != nil {
+		method = http.MethodPost
+	}
+	req, makeErr := http.NewRequest(method, e.url, bytes.NewReader(graphqlBody))
 	if makeErr != nil {
 		return out, unavailable("acquisition_request")
 	}
 	req.Close = true
 	req.Header.Set("Accept-Encoding", "identity")
+	if p.source.auth != nil {
+		if req.URL.Scheme != "https" || req.URL.Host != "api.github.com" || req.URL.User != nil || p.source.auth.repository == "" || p.source.auth.header == "" {
+			return out, unavailable("github_auth_origin")
+		}
+		req.Header.Set("Authorization", p.source.auth.header)
+	}
+	if graphqlBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	host := req.URL.Hostname()
 	port := req.URL.Port()
 	if port == "" {
 		port = "443"
 	}
-	address := host
-	if net.ParseIP(host) == nil {
-		// Public resolver APIs do not expose a join for their internal workers.
-		// Retain this adapter gate permanently on this path, even on success,
-		// rather than assert a worker lifetime we cannot prove. This transfer
-		// may finish; no further transfer or phase is admitted on this adapter.
-		p.mu.Lock()
-		p.uncertain = true
-		p.mu.Unlock()
-		resolver := &net.Resolver{PreferGo: true, StrictErrors: true}
-		addresses, lookupErr := resolver.LookupHost(p.ctx, host)
-		if lookupErr != nil || acquisitionExpired(p.ctx) || len(addresses) == 0 {
-			return out, unavailable("acquisition_resolution_lifetime")
+	var raw net.Conn
+	if p.source.connector != nil {
+		raw, err = p.source.connector.connect(p.ctx, host, port)
+		if err != nil || raw == nil {
+			if raw != nil {
+				_ = raw.Close()
+			}
+			return out, unavailable("acquisition_connector")
 		}
-		address = addresses[0]
-	}
-	// A numeric destination avoids resolver singleflight and parallel racers.
-	raw, dialErr := (&net.Dialer{FallbackDelay: -1}).DialContext(p.ctx, "tcp", net.JoinHostPort(address, port))
-	if dialErr != nil {
-		// DialContext may return before its internal cancellation callback
-		// exits. There is no public join. Retain the gate on every dial error.
-		if raw != nil {
-			_ = raw.Close()
+	} else {
+		address := host
+		if net.ParseIP(host) == nil {
+			// Public resolver APIs do not expose a join for their internal workers.
+			// Retain this adapter gate permanently on this path, even on success,
+			// rather than assert a worker lifetime we cannot prove. This transfer
+			// may finish; no further transfer or phase is admitted on this adapter.
+			p.mu.Lock()
+			p.uncertain = true
+			p.mu.Unlock()
+			resolver := &net.Resolver{PreferGo: true, StrictErrors: true}
+			addresses, lookupErr := resolver.LookupHost(p.ctx, host)
+			if lookupErr != nil || acquisitionExpired(p.ctx) || len(addresses) == 0 {
+				return out, unavailable("acquisition_resolution_lifetime")
+			}
+			address = addresses[0]
 		}
-		p.mu.Lock()
-		p.uncertain = true
-		p.mu.Unlock()
-		return out, unavailable("acquisition_dial_lifetime")
+		// A numeric destination avoids resolver singleflight and parallel racers.
+		var dialErr error
+		raw, dialErr = (&net.Dialer{FallbackDelay: -1}).DialContext(p.ctx, "tcp", net.JoinHostPort(address, port))
+		if dialErr != nil {
+			// DialContext may return before its internal cancellation callback
+			// exits. There is no public join. Retain the gate on every dial error.
+			if raw != nil {
+				_ = raw.Close()
+			}
+			p.mu.Lock()
+			p.uncertain = true
+			p.mu.Unlock()
+			return out, unavailable("acquisition_dial_lifetime")
+		}
 	}
 	deadline, _ := p.ctx.Deadline()
 	if setErr := raw.SetDeadline(deadline); setErr != nil {

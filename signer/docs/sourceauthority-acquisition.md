@@ -10,8 +10,10 @@ Protected installation supplies a canonical provider identifier, one exact HTTPS
 origin, a copied table of exact canonical paths and response classes, optional
 copied public TLS roots, and explicit limits. Paths use a narrow ASCII subset;
 queries, escaped paths, user information, fragments, path traversal and alternate
-origins are unavailable. The implementation accepts no credentials and discovers
-none. No actual provider installation is configured. Endpoint construction and
+origins are unavailable. Generic acquisition discovers no credentials. Protected
+GitHub composition can bind an opaque installation auth capability and an owned
+connector; neither has a public issuer. No actual provider installation is
+configured. Endpoint construction and
 admission require authentic source-owned facts; this reader does not invent a
 provider API mapping. A release request has no access to these private settings.
 
@@ -51,9 +53,12 @@ Public resolver and failed-dial APIs do not supply a join handle for every
 internal worker. The implementation conservatively retains the adapter gate
 permanently after any hostname resolution or failed numeric dial. A hostname
 transfer can finish, but another transfer or phase on that adapter refuses. It
-never replaces the adapter or retries to bypass this containment. This is an
-explicit availability limitation pending a separately qualified resolver/dial
-lifecycle. Successful numeric dials, including canceled TLS handshakes and body
+never replaces the adapter or retries to bypass this containment. The protected
+GitHub composition has a separate owned numeric connector with synchronous
+nonblocking connect/select and no resolution or dial workers. It requires a
+privately issued canonical-address capability; that issuer and its currentness
+qualification are still missing. The old resolver path remains contained.
+Successful numeric dials, including canceled TLS handshakes and body
 reads, have the owned cleanup path and can release normally after phase close.
 
 The header reservation covers parser representation and scratch, rather than

@@ -115,9 +115,12 @@ func (l *protectedGitHubLab) changePolicy(t *testing.T, fault string) {
 	}
 }
 
-func newProtectedGitHubAuditFixture(t *testing.T) (*auditAdapterFixture, *protectedGitHubLab) {
+func newProtectedGitHubAuditFixture(t *testing.T, supplied ...*protectedGitHubLab) (*auditAdapterFixture, *protectedGitHubLab) {
 	t.Helper()
 	l := newProtectedGitHubLab(t)
+	if len(supplied) > 0 {
+		l = supplied[0]
+	}
 	e, _, raw := newEffectFixture(t)
 	e.f.r = l.request
 	p := &adapterDurability{t: t, synced: map[string]map[string]bool{}}

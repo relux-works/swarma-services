@@ -16,7 +16,7 @@ import (
 // Synthetic signed controls only. No live provider, reviewer key or mutation.
 func graphLab(t *testing.T) (reviewLab, githubReviewProof, map[string]any) {
 	l := newReviewLab(t)
-	p := githubReviewProof{binding: l.b, account: GitHubMember{ID: 2, Login: "reviewer"}, body: string(l.signed(t)), nodeID: "PRR_lab"}
+	p := githubReviewProof{binding: l.b, account: GitHubMember{ID: 2, Login: "reviewer"}, body: string(l.signed(t)), nodeID: "PRR_lab", submittedAt: 1794009600}
 	return l, p, graphNode(p)
 }
 func graphNode(p githubReviewProof) map[string]any {
@@ -197,7 +197,7 @@ func labGitHubAuthority(t *testing.T) (*Authority, Request, *labGraphReader, git
 	f := validFixture(t)
 	commit := fixtureSign(t, f.unsigned, l.producer, l.p.OwnerKeys[0].PublicKey, "sha512")
 	l.b.Head = fixtureOID(commit)
-	proof := githubReviewProof{binding: l.b, account: GitHubMember{ID: 2, Login: "reviewer"}, body: string(l.signed(t)), nodeID: "PRR_lab"}
+	proof := githubReviewProof{binding: l.b, account: GitHubMember{ID: 2, Login: "reviewer"}, body: string(l.signed(t)), nodeID: "PRR_lab", submittedAt: 1794009600}
 	g := &labGraphReader{raw: graphBytes(graphNode(proof))}
 	m := GitHubPRMembership{Producer: GitHubMember{ID: 1, Login: "producer"}, Reviewers: []GitHubMember{proof.account}}
 	c := githubPRInstallation{policy: l.p, members: m, number: l.b.PR, clock: f.c, graphql: g, policies: labPolicyReader{githubPolicySnapshot{Digest: l.p.SHA256, Generation: "lab", State: Current, Members: m}}, git: labGitReader{githubGitSnapshot{Repository: RepositoryRecord{Canonical: l.b.Repository, DefaultBranch: "main", DefaultHead: l.b.Head}, Commit: commit}}, checks: labCheckReader{githubCheckSnapshot{Policy: CheckPolicy{Repository: l.b.Repository, Ref: "lab", State: "no_required"}, Inventory: CheckInventory{Repository: l.b.Repository, Head: l.b.Head, Coverage: Complete}}}}

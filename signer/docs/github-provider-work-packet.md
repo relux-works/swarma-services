@@ -1,27 +1,25 @@
 # Protected GitHub provider implementation work packet
 
-This is bounded follow-up work, not an implemented or qualified provider.
-The policy codec, protected file loader, reviewer verification, GraphQL decoder,
-effect fences and protected audited construction are buildable source. The
-production acquisition and installation composition described below is missing.
-Synthetic TLS REST and in-memory GraphQL tests establish no live authentication,
-production connection lifetime, native readiness or first-run qualification.
+Status: PARTIAL source implementation; no qualified production provider.
+`OpenProtectedGitHubPRSource` now composes protected policy loading, current
+membership rereads, REST inventory and a concrete fixed-query authenticated
+GraphQL POST transport. It returns the protected source accepted by the existing
+authority/effect/audited constructors. Synthetic canonical-host TLS fixtures
+exercise this exact public constructor through admission, build/sign/verify,
+release and recovery, without replacing authority fields.
 
-The present `githubGraphQLReader`, request type and fixed query are private in
-`internal/sourceauthority/github_graphql.go`; their only concrete reader is a
-test implementation. `githubPRInstallation` and `newGitHubPRSource` in
-`github_source.go` require current policy/membership, original Git and complete
-check ports. Only laboratory assemblies supply those ports. `NewGitHubPR`
-correctly refuses generic Sources. Existing `sourceAcquisition` builds GETs,
-not authenticated GraphQL POSTs, and its canonical-host resolver path retains
-an uncertain gate after the first transfer. It cannot complete the subsequent
-inventory rereads. These are implementation gaps even if credentials were ready.
+Current membership, original Git-object/ancestry and effective complete check
+readers remain explicit custodian interface gaps, with synthetic readers only.
+So do opaque auth-capability issuance/visibility and qualified numeric address
+issuance/currentness. Neither opaque capability has a public issuer; zero,
+missing or unqualified capabilities refuse without provider probes. Production
+use is blocked until these source gaps are implemented and reviewed. Possessing
+credentials alone would not complete this work.
 
-The proposed production API is
+The implemented composition API is
 `OpenProtectedGitHubPRSource(ctx, ProtectedGitHubPRInstallation) (Source, error)`
 in `internal/sourceauthority`, called only by the trusted service composition
-root outside requests. Neither this name nor that installation type exists yet.
-The implementation must return the exact protected `*githubPRSource` accepted
+root outside requests. It returns the exact protected `*githubPRSource` accepted
 by `NewGitHubPR`, `NewWithPolicySource`, `NewEffectRunnerWithPolicySource` and
 `OpenAuditedSignerWithPolicySource`. Do not export a generic observation mapper
 or permit request-selected URLs, clients, queries, headers, credentials or trust.
@@ -95,7 +93,31 @@ refuse subsequent use. Do not clear the present resolver gate merely to make
 multiple REST reads work. A qualified solution may use an independently reviewed
 owned resolver/connector with provable completion or a supervised acquisition
 process whose full lifetime is reaped; its trust and budget contract must be
-explicit. No implementation of either alternative is delivered here.
+explicit. A Linux owned numeric connector is now implemented: one nonblocking
+socket, synchronous connect/select with at most 5 ms cancellation polling under
+the unchanged original deadline, no resolver, parallel racer, callback or retry.
+Descriptor duplication into Go's poller occurs only after connection completion;
+every failure closes the owned descriptor before returning. TLS and HTTP retain
+the existing direct-close and joined cancellation callback. Existing resolver
+and DialContext uncertainty containment remains unchanged on the old path.
+
+The connector's numeric address is private, not supplied by a request or public
+constructor. There is deliberately no address issuer: independent custody must
+qualify canonical address provenance, currentness/expiry and refresh refusal
+before issuing it. No DNS implementation or DNS cancellation qualification is
+claimed. The new Linux connector requires independent review; its presence does
+not admit a new host primitive or clear the old DNS gate.
+
+Implemented transport tests include canonical hostname/public-root verification
+(the offline test process has a synthetic public-root store), exact POST/query/
+original-node variables and auth-origin binding, strict response and aggregate
+bounds/attempt accounting, partial/error/deleted responses, current policy and
+membership replacement/revocation, repeated successful inventory/final reads,
+blocked kernel connect cancellation, and TLS/header/body cancellation followed
+by gate reuse only after join. Original submission time is also correlated.
+Remaining custodian readers must enforce shared acquisition budgets before
+allocating or returning material; their concrete preallocation, remote-attempt
+accounting and lifetime qualification remain unimplemented and block readiness.
 
 Acceptance for this separate unit requires offline synthetic HTTP/TLS controls
 for exact POST/query/variables/auth-origin binding, allocations/headers/body and

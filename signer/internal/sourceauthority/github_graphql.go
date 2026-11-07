@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,7 @@ type githubReviewProof struct {
 	binding      GitHubReviewBinding
 	account      GitHubMember
 	body, nodeID string
+	submittedAt  int64
 }
 
 // encoding/json matches struct fields without case sensitivity. Only exact
@@ -52,31 +54,60 @@ func validGitHubMembers(m GitHubPRMembership) bool {
 	if m.Producer.ID == 0 || !ascii(m.Producer.Login, 39) || len(m.Reviewers) == 0 || len(m.Reviewers) > 4 {
 		return false
 	}
-	ids := map[uint64]bool{m.Producer.ID: true}
-	logins := map[string]bool{strings.ToLower(m.Producer.Login): true}
+	// A publisher may occupy both roles, but each numeric account must have
+	// exactly one login and each case-folded login exactly one numeric account.
+	// Exact login spelling is retained for REST and GraphQL correlation.
+	ids := map[uint64]string{m.Producer.ID: m.Producer.Login}
+	logins := map[string]uint64{strings.ToLower(m.Producer.Login): m.Producer.ID}
+	seenReviewers := map[uint64]bool{}
 	for _, r := range m.Reviewers {
-		if r.ID == 0 || !ascii(r.Login, 39) || ids[r.ID] || logins[strings.ToLower(r.Login)] {
+		login := strings.ToLower(r.Login)
+		if r.ID == 0 || !ascii(r.Login, 39) || seenReviewers[r.ID] {
 			return false
 		}
-		ids[r.ID] = true
-		logins[strings.ToLower(r.Login)] = true
+		if previous, ok := ids[r.ID]; ok && previous != r.Login {
+			return false
+		}
+		if previous, ok := logins[login]; ok && previous != r.ID {
+			return false
+		}
+		ids[r.ID], logins[login], seenReviewers[r.ID] = r.Login, r.ID, true
 	}
 	return true
 }
+
+// Membership pins delivery accounts, not signing identities. ReviewerKeys is
+// the independently validated role-wide signing pool; VerifyGitHubReview binds
+// the actual verifying key to the signed original review ID and exact tuple.
+// A single publisher entry can carry any admitted reviewer pin. Repeating that
+// account cannot add reviewers or create another qualifying original delivery.
+func githubReviewerAccount(m GitHubPRMembership, r PlatformReview) (GitHubMember, bool) {
+	if !validGitHubMembers(m) {
+		return GitHubMember{}, false
+	}
+	for _, a := range m.Reviewers {
+		if r.AccountID == a.ID && r.AccountLogin == a.Login {
+			return a, true
+		}
+	}
+	return GitHubMember{}, false
+}
+
 func bindSourceGitHubReview(o Observation, p Policy, m GitHubPRMembership) (PlatformReview, string, error) {
 	b := GitHubReviewBinding{Repository: o.PR.Repository, BaseBranch: o.PR.BaseBranch, Head: o.PR.Head, Base: o.PR.Base, PR: o.PR.Number}
 	r, v, err := BindGitHubReviewInventory(p, b, o.Reviews)
 	if err != nil {
 		return r, "", err
 	}
-	for _, a := range m.Reviewers {
-		if r.AccountID == a.ID && r.AccountLogin == a.Login {
-			return r, v.BodySHA256, nil
-		}
+	if _, ok := githubReviewerAccount(m, r); ok {
+		return r, v.BodySHA256, nil
 	}
 	return PlatformReview{}, "", rejected("github_reviewer_account")
 }
 func (s *githubPRSource) readOriginal(ctx context.Context, p githubReviewProof) error {
+	return s.readOriginalPhase(ctx, p, nil)
+}
+func (s *githubPRSource) readOriginalPhase(ctx context.Context, p githubReviewProof, phase *acquisitionPhase) error {
 	if s == nil || s.graphql == nil || ctx == nil || acquisitionExpired(ctx) || ValidateGitHubReviewBinding(s.policy, p.binding) != nil || !ascii(p.nodeID, 256) {
 		return unavailable("github_graphql_configuration")
 	}
@@ -84,12 +115,27 @@ func (s *githubPRSource) readOriginal(ctx context.Context, p githubReviewProof) 
 		return unavailable("github_graphql_busy")
 	}
 	defer s.graphBusy.Store(false)
-	raw, err := s.graphql.readReview(acquisitionContext{ctx}, githubGraphQLRequest{githubOriginalReviewQuery, p.nodeID, MaxReviewCommentBytes + 16384, acquisitionHeaderMax, 1})
+	current, currentErr := s.policies.readCurrent(ctx)
+	if currentErr != nil || current.Digest != s.policy.SHA256 || current.State != Current || !text(current.Generation, 256) || !reflect.DeepEqual(current.Members, s.members) {
+		return unavailable("github_policy")
+	}
+	r := githubGraphQLRequest{githubOriginalReviewQuery, p.nodeID, MaxReviewCommentBytes + 16384, acquisitionHeaderMax, 1}
+	var raw []byte
+	var err error
+	if g, ok := s.graphql.(*githubGraphQLTransport); ok && phase != nil {
+		raw, err = g.readPhase(phase, r)
+	} else {
+		raw, err = s.graphql.readReview(acquisitionContext{ctx}, r)
+	}
 	if err != nil || acquisitionExpired(ctx) || len(raw) == 0 || len(raw) > MaxReviewCommentBytes+16384 {
 		return unavailable("github_graphql_read")
 	}
 	if err := verifyGraphQLOriginal(raw, s.policy, p); err != nil {
 		return err
+	}
+	end, endErr := s.policies.readCurrent(ctx)
+	if endErr != nil || !reflect.DeepEqual(current, end) {
+		return unavailable("github_policy_changed")
 	}
 	if acquisitionExpired(ctx) {
 		return unavailable("github_graphql_read")
@@ -162,7 +208,7 @@ func verifyGraphQLOriginal(raw []byte, p Policy, expected githubReviewProof) err
 	if json.Unmarshal(n.DatabaseID, &databaseID) != nil {
 		databaseID = string(n.DatabaseID)
 	}
-	if !eq(n.Type, "PullRequestReview") || !eq(n.ID, expected.nodeID) || databaseID != id || !eq(n.State, "COMMENTED") || !eq(n.Body, expected.body) || n.Commit == nil || !eq(n.Commit.OID, b.Head) || n.Author == nil || !eq(n.Author.Login, expected.account.Login) || n.Author.ID == nil || *n.Author.ID != expected.account.ID || n.Submitted == nil || n.Submitted.IsZero() {
+	if !eq(n.Type, "PullRequestReview") || !eq(n.ID, expected.nodeID) || databaseID != id || !eq(n.State, "COMMENTED") || !eq(n.Body, expected.body) || n.Commit == nil || !eq(n.Commit.OID, b.Head) || n.Author == nil || !eq(n.Author.Login, expected.account.Login) || n.Author.ID == nil || *n.Author.ID != expected.account.ID || n.Submitted == nil || n.Submitted.IsZero() || expected.submittedAt <= 0 || n.Submitted.Unix() != expected.submittedAt || n.Submitted.Nanosecond() != 0 {
 		return rejected("github_graphql_identity_or_state")
 	}
 	if !bytes.Equal(n.LastEdited, []byte("null")) || n.Includes == nil || *n.Includes || n.Minimized == nil || *n.Minimized || n.Edits == nil || n.Edits.Count == nil || *n.Edits.Count != 0 || !bytes.Equal(n.Edits.Nodes, []byte("[]")) || n.Edits.Page == nil || n.Edits.Page.Next == nil || *n.Edits.Page.Next || n.Edits.Page.Previous == nil || *n.Edits.Page.Previous || !bytes.Equal(n.Edits.Page.Start, []byte("null")) || !bytes.Equal(n.Edits.Page.End, []byte("null")) {

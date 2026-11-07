@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-// These source-owned component seams deliberately do not implement the pending
-// policy loader, Git object acquisition or effective check-visibility work.
+// These source-owned ports bind protected installed policy/current membership,
+// original Git objects and effective checks. The public composition implements
+// policy loading; concrete custodian membership/Git/check readers remain gaps.
 // Implementations must authenticate current state, bound work BEFORE returning,
 // honor ctx, and transfer owned bytes. They are protected installation, not
 // request callbacks. No exported constructor accepts caller evidence.
@@ -268,19 +269,14 @@ func (s *githubPRSource) Read(ctx context.Context, q Query) (out Observation, er
 		return out, err
 	}
 	selection := githubVerdictSelection{ReviewID: selected.ID}
-	var reviewer GitHubMember
-	for _, m := range s.members.Reviewers {
-		if m.ID == selected.AccountID && m.Login == selected.AccountLogin {
-			reviewer = m
-		}
-	}
-	if reviewer.ID == 0 {
+	reviewer, ok := githubReviewerAccount(s.members, selected)
+	if !ok {
 		return out, rejected("github_reviewer_account")
 	}
 	id, _ := strconv.ParseUint(selected.ID, 10, 63)
 	binding.ReviewID = id
-	proof := githubReviewProof{binding: binding, account: reviewer, body: selected.Body, nodeID: selected.NodeID}
-	if err := s.readOriginal(ctx, proof); err != nil {
+	proof := githubReviewProof{binding: binding, account: reviewer, body: selected.Body, nodeID: selected.NodeID, submittedAt: selected.SubmittedAt}
+	if err := s.readOriginalPhase(ctx, proof, phase); err != nil {
 		return out, err
 	}
 	o := Observation{Binding: q, ObservedAt: start.Wall.Unix(), ExpiresAt: start.Wall.Unix() + 300, PolicySHA256: policy.Digest, PolicyState: policy.State, Repository: git.Repository, Commit: git.Commit, LandingPath: git.LandingPath, PR: pr, GitHub: &GitHubHandoff{Repository: pr.Repository, Head: pr.Head, Base: pr.Base, Number: pr.Number, Producer: producer, Reviewer: reviewer, Verdicts: selection.Verdicts}, Reviews: ReviewInventory{Coverage: Complete, SelectedID: selection.ReviewID, Records: reviews}, CheckPolicy: checks.Policy, Checks: checks.Inventory}
