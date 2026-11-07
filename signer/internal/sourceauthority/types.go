@@ -35,8 +35,8 @@ type OwnerKey struct {
 }
 
 // Policy must originate in protected installed configuration. It is defensively
-// copied by New. Matrix sender IDs are exact authenticated member identifiers;
-// display names, relays and publishing hosting accounts establish no identity.
+// copied by constructors. Sender IDs are exact configured member identifiers;
+// hosting accounts establish no membership without protected explicit mapping.
 type Policy struct {
 	Product, Alias, CanonicalRepository, RepositoryName, DefaultBranch string
 	SHA256, MatrixOrigin, ProducerSender                               string
@@ -90,12 +90,14 @@ type Clock interface {
 
 // Source is the privileged authenticated acquisition/normalization boundary.
 // Read must use ONLY configured canonical authorities, read current policy,
-// default branch, PR/review state and checks, and authenticate Matrix origin,
-// sender, producer handoff, pages and per-scope frontiers. It must obey ctx and
+// default branch, PR/review state and checks. The legacy route authenticates
+// Matrix origin, sender, handoff and per-scope frontiers; the explicit PR route
+// authenticates native PR/account bindings and separate verdict provenance.
+// It must obey ctx and
 // bound allocations before returning material. It cannot be selected or fed by
 // a release caller. No boolean verification callback or caller evidence API
 // exists. Implementing this interface is a trust grant, not proof of correctness.
-// This unit supplies no production implementation of that trust grant.
+// The PR adapter still requires independently qualified component installations.
 type Source interface {
 	Read(context.Context, Query) (Observation, error)
 }
@@ -135,6 +137,7 @@ type Observation struct {
 	LandingPath [][]byte
 	PR          PullRequest
 	Producer    ProducerHandoff
+	GitHub      *GitHubHandoff
 	Reviews     ReviewInventory
 	Checks      CheckInventory
 	CheckPolicy CheckPolicy
@@ -168,6 +171,8 @@ type ReviewInventory struct {
 }
 
 type PlatformReview struct {
+	AccountID                                     uint64
+	AccountLogin                                  string
 	Repository, ID, Head, Base, Kind, State, Body string
 	PR                                            uint64
 	SubmittedAt                                   int64

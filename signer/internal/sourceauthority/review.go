@@ -230,23 +230,23 @@ func verdictBody(body string, p Policy, pr PullRequest) error {
 	return nil
 }
 
-func verifyReview(o Observation, p Policy) (PlatformReview, string, error) {
+func selectedPlatformReview(o Observation, p Policy) (PlatformReview, error) {
 	var selected PlatformReview
 	if o.Reviews.Coverage != Complete {
-		return selected, "", unavailable("review_coverage")
+		return selected, unavailable("review_coverage")
 	}
 	if !text(o.Reviews.SelectedID, 256) {
-		return selected, "", rejected("review_missing")
+		return selected, rejected("review_missing")
 	}
 	found := 0
 	seen := make(map[string]bool)
 	for _, r := range o.Reviews.Records {
 		if !text(r.ID, 256) || seen[r.ID] || r.Repository != p.CanonicalRepository || r.PR != o.PR.Number {
-			return selected, "", unavailable("review_inventory")
+			return selected, unavailable("review_inventory")
 		}
 		seen[r.ID] = true
 		if r.State == "active" && r.Kind == "CHANGES_REQUESTED" {
-			return selected, "", rejected("review_withdrawal_or_blocking")
+			return selected, rejected("review_withdrawal_or_blocking")
 		}
 		if r.ID == o.Reviews.SelectedID {
 			selected = r
@@ -254,13 +254,21 @@ func verifyReview(o Observation, p Policy) (PlatformReview, string, error) {
 		}
 	}
 	if found != 1 {
-		return selected, "", rejected("review_missing")
+		return selected, rejected("review_missing")
 	}
 	if selected.Head != o.PR.Head || selected.Base != o.PR.Base || selected.Kind != "COMMENT" || selected.State != "active" {
-		return selected, "", rejected("review_withdrawal_or_binding")
+		return selected, rejected("review_withdrawal_or_binding")
 	}
 	if selected.SubmittedAt < 86400 || selected.SubmittedAt > o.ObservedAt || selected.SubmittedAt > 9223372036854775807-300 {
-		return selected, "", unavailable("review_time")
+		return selected, unavailable("review_time")
+	}
+	return selected, nil
+}
+
+func verifyReview(o Observation, p Policy) (PlatformReview, string, error) {
+	selected, err := selectedPlatformReview(o, p)
+	if err != nil {
+		return selected, "", err
 	}
 	digest, err := platformDigest(selected, o.PR.Head, o.PR.Base)
 	if err != nil {

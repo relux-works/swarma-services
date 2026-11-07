@@ -15,12 +15,17 @@ type Authority struct {
 	policy Policy
 	source Source
 	clock  Clock
+	github *GitHubPRMembership
 }
 
 func New(policy Policy, source Source, clock Clock) (*Authority, error) {
 	if source == nil || clock == nil || !validPolicy(policy) {
 		return nil, unavailable("configuration")
 	}
+	return &Authority{policy: copyPolicy(policy), source: source, clock: clock}, nil
+}
+
+func copyPolicy(policy Policy) Policy {
 	p := policy
 	p.Scopes = append([]string(nil), policy.Scopes...)
 	p.ReviewerSenders = append([]string(nil), policy.ReviewerSenders...)
@@ -28,7 +33,7 @@ func New(policy Policy, source Source, clock Clock) (*Authority, error) {
 	for i := range p.OwnerKeys {
 		p.OwnerKeys[i].PublicKey = bytes.Clone(p.OwnerKeys[i].PublicKey)
 	}
-	return &Authority{p, source, clock}, nil
+	return p
 }
 
 func text(s string, max int) bool {
@@ -64,10 +69,14 @@ func unique(values []string, maxBytes int) bool {
 	return true
 }
 func validPolicy(p Policy) bool {
-	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) || !lowerHex(p.SHA256, 64) || !ascii(p.MatrixOrigin, 255) || !text(p.ProducerSender, 255) {
+	return validPRPolicy(p) && ascii(p.MatrixOrigin, 255) && len(p.Scopes) >= 1 && len(p.Scopes) <= MaxScopes && unique(p.Scopes, 512)
+}
+
+func validPRPolicy(p Policy) bool {
+	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) || !lowerHex(p.SHA256, 64) || !text(p.ProducerSender, 255) {
 		return false
 	}
-	if len(p.Scopes) < 1 || len(p.Scopes) > MaxScopes || !unique(p.Scopes, 512) || len(p.ReviewerSenders) == 0 || !unique(p.ReviewerSenders, 255) || len(p.OwnerKeys) == 0 {
+	if len(p.ReviewerSenders) == 0 || !unique(p.ReviewerSenders, 255) || len(p.OwnerKeys) == 0 {
 		return false
 	}
 	for _, k := range p.OwnerKeys {
@@ -165,10 +174,20 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 		return nil, rejected("pull_request")
 	}
 	producer := o.Producer
-	if producer.Origin != a.policy.MatrixOrigin || !text(producer.Scope, 512) || !text(producer.Event, 512) || producer.Sender != a.policy.ProducerSender || producer.Repository != a.policy.CanonicalRepository || producer.Head != c.oid || producer.PR != o.PR.Number || producer.State != "intact" {
+	if a.github != nil {
+		if err := verifyGitHubHandoff(o, a.policy, *a.github); err != nil {
+			return nil, err
+		}
+	} else if o.GitHub != nil || producer.Origin != a.policy.MatrixOrigin || !text(producer.Scope, 512) || !text(producer.Event, 512) || producer.Sender != a.policy.ProducerSender || producer.Repository != a.policy.CanonicalRepository || producer.Head != c.oid || producer.PR != o.PR.Number || producer.State != "intact" {
 		return nil, rejected("producer_handoff")
 	}
-	review, digest, err := verifyReview(o, a.policy)
+	var review PlatformReview
+	var digest string
+	if a.github != nil {
+		review, digest, err = verifyGitHubReview(o, a.policy, *a.github)
+	} else {
+		review, digest, err = verifyReview(o, a.policy)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +224,18 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 }
 
 func bounded(o Observation, p Profile) error {
+	if o.GitHub != nil {
+		if len(o.GitHub.Verdicts.Records) > MaxEvents {
+			return unavailable("profile_capacity")
+		}
+		bodies := 0
+		for _, v := range o.GitHub.Verdicts.Records {
+			if len(v.Body) > MaxBodyBytes-bodies {
+				return unavailable("profile_capacity")
+			}
+			bodies += len(v.Body)
+		}
+	}
 	if len(o.Commit) == 0 || len(o.Commit) > p.CommitBytes || len(o.LandingPath) > p.AncestryCommits || len(o.Reviews.Records) > p.PlatformReviews || len(o.Checks.Records) > p.CheckRecords || len(o.CheckPolicy.Required) > p.CheckRecords {
 		return unavailable("profile_capacity")
 	}

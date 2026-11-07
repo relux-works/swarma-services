@@ -1,5 +1,9 @@
 # Anonymous PR first-run contract gap
 
+Historical diagnostic for the legacy contract. The separate source candidate in
+[sourceauthority-github-pr.md](sourceauthority-github-pr.md) adds an explicit PR
+route; its remaining production dependencies and exact verdict gap are stated there.
+
 The anonymous PR first-run route cannot currently produce a truthful successful
 `Source.Read` using the unchanged source-authority core. This is a source
 contract compatibility finding, not a provider failure or a denial of the
