@@ -18,6 +18,11 @@ candidate at its applicable gate. A runtime result is not a prerequisite for spe
 
 No service, user, key, ACL, Keychain, sudo, daemon or private broker operation is authorized by this proposal.
 
+The [Curator first-client delta](signer/docs/curator-client-delta-r1.md) proposes concrete client decoding,
+origin, projection, transfer and retry/UNKNOWN clauses against the existing version 1 envelope. Its C8 matrix
+records provider/consumer acceptance owners and unresolved custody/pin dependencies. It is a design candidate;
+the agreement points above remain open until independent review and counterpart acceptance.
+
 The original requirements, current first-admission-only amendment and broker compatibility addendum have been
 received. Historical per-release-presence wording remains superseded. The known source boundary is documented
 in [broker compatibility inputs](signer/docs/baseline-r5.md#kek-broker-compatibility-inputs); it is not runtime acceptance.
