@@ -13,8 +13,10 @@ bound to the build, signing and audit receipts.
 The signing identity is an ECDSA P-256 certificate held by a dedicated service user. The developer keys in the login
 keychain are not used.
 
-The first client is Curator core, which already resolves credentials and uses authorization tokens. Its separate
-launcher follows later. The network proxy's KEK broker is the second client after Curator rollout and dogfooding.
+The first keyless source-input client is `mac-keyvault`, a Go tool with a login-Keychain signing path.
+Its [fixed source/recipe tuple and implementation](docs/first-client-keyvault/source-input-implementation.md)
+cover source preparation only. Curator follows as the second client after its recipe inputs are available.
+The separate Curator launcher and network proxy KEK broker remain later integrations.
 
 Owner, 2026-11-01: «так ты говоришь нет подписи у куратора ну так давай подписывать».
 
@@ -34,6 +36,12 @@ It binds exact original source bytes, checks original `go.sum` anchors, canonica
 module-path collisions and both standard Go checksum domains, then publishes an immutable snapshot.
 The collision index uses bounded segment keys; its [resource contract](docs/moduleinput-resources.md)
 describes the algorithmic bound and the native caller budgets still required before integration.
+
+`internal/keyvaultinput` composes these existing packages for the exact selected mac-keyvault source.
+It binds retained job/manifest values, verifies the complete fixed source/module DATA closure and original
+h1 anchors, and returns immutable snapshots plus fixed closed-environment recipe descriptions. Native
+readiness always refuses pending actual SDK/toolchain/policy/isolation inputs; it has no execution entry point.
+Other recipes and general native/source-graph qualification retain their existing boundaries below.
 
 The public decoder admits at most 1,048,576 actual BODY bytes. Entries are nonempty and at most 8,192; receipt
 records are at most 512; regular files are at most 64 MiB and their checked sum at most 1 GiB. Decoded entry paths,

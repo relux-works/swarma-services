@@ -53,4 +53,4 @@ Each following line names the cohesive test group and its bounded claim; executi
 
 All signatures and authority decisions in these tests are synthetic. Fixtures perform actual local writes, fsyncs and reads, with bounded fault injection and process control. A process kill is not power-loss proof. Linux fsync fixtures do not qualify Darwin/APFS, F_FULLFSYNC, native signature verification, separate-UID isolation, a foreign-UID fixture or a production durability profile. Darwin/arm64 compile/vet is compilation/analysis only; actual owner Mac qualification remains external.
 
-The candidate requires independent Muse review and the unit's Meta/Vega/Maia signed-delivery route. It is not acceptance, a live grant, source admission, a configured checkpoint sink, runtime adoption or permission for production/key/provider operations.
+The candidate requires independent Muse review and the Services custodian's signed-delivery route. It is not acceptance, a live grant, source admission, a configured checkpoint sink, runtime adoption or permission for production/key/provider operations.
