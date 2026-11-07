@@ -11,7 +11,8 @@ permissions:
 jobs:
   vet-and-race:
     name: Go vet and race
-    runs-on: ubuntu-24.04
+    # This runner permits unprivileged namespace setup without host policy edits.
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     env:
       GOTOOLCHAIN: local
@@ -51,11 +52,11 @@ jobs:
           test "$(go version)" = 'go version go1.26.8 linux/amd64'
           # Unprivileged extraction only: no package installation or host changes.
           curl --fail --silent --show-error --location --max-time 60 \
-            https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb \
+            https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_0.6.1-1ubuntu0.3_amd64.deb \
             -o "$state/bubblewrap.deb"
-          echo "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094  $state/bubblewrap.deb" | sha256sum --check --strict
+          echo "706763714e5d19fc7ab2572a6418506e3a4a5d5960e99309707b58117e6b40cb  $state/bubblewrap.deb" | sha256sum --check --strict
           dpkg-deb --extract "$state/bubblewrap.deb" "$state/bubblewrap"
-          test "$("$state/bubblewrap/usr/bin/bwrap" --version)" = 'bubblewrap 0.9.0'
+          test "$("$state/bubblewrap/usr/bin/bwrap" --version)" = 'bubblewrap 0.6.1'
           # Only dependency acquisition has network access. Go verifies canonical
           # module archive/go.mod h1 values against the committed go.sum files.
           while IFS= read -r -d '' mod; do
