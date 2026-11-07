@@ -15,6 +15,12 @@ For an explicitly requested development check, read [contributor commands](refer
 
 For writing, wiring and testing a contributor source-authority adapter, read [the existing adapter seam](references/source-adapter.md). Its `Source` and `Clock` interfaces are constructor-injected trusted dependencies. There is no plugin discovery, registration command, registry or production provider adapter. Do not turn caller-supplied evidence into an adapter or infer permission for provider access.
 
+For the landed `sourceauthority.NewProcessClock`, read [process-clock wiring and recovery](references/source-adapter.md#process-clock). Retain the constructed pointer outside request handling; a clock refusal permanently disables that instance and requires new source qualification with a new instance.
+
+For consuming authenticated builder streams with `internal/artifactsnapshot`, read [unsigned artifact snapshots](references/signer-components.md#unsigned-artifact-snapshots). Preserve the original job deadline and explicit connection/storage cleanup; byte equality does not authorize signing.
+
+For planning the fixed KeyVault source with `internal/keylessexecutor`, read [the fixed keyless executor](references/signer-components.md#fixed-keyless-executor). `PlanInput` consumes an opaque verified `keyvaultinput.Prepared`; `RunNative` always refuses. Planning and synthetic controller checks do not qualify execution.
+
 There is no signer service CLI or installation command. The separate native durability fixture runner is described in the [native check contract](../../../signer/docs/native-durability-check.md); it is not a service or an inert example. Actual Mac SDK, provider, clock and native isolation qualification remain unavailable from contributor examples.
 
 For future design work, follow the design documents in [the signer status and reading order](../../../signer/README.md). Separate implementation notes describe landed body-shape decoding and the fixed KeyVault source-input composition; neither establishes native readiness or a production service. The design contracts do not supply missing adapters, cache synthesis, production builds, signing or native isolation. The admitted manifest limit remains 1 MiB; the proposed 4 MiB limit is not active.

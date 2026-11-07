@@ -10,6 +10,14 @@ Implement `Source.Read(context.Context, Query) (Observation, error)` and `Clock.
 
 Use `BeforeBuild` and a separately refreshed `BeforeSign` with fresh service-generated nonces. Never reuse a fixture, prior phase observation or a locally fresh lease as current provider authority. Read [the source-authority implementation contract](../../../../signer/docs/sourceauthority-implementation.md#trust-boundary-and-remaining-dependencies) before implementing an actual adapter. Provider normalization, installed policy/key custody and host qualification remain separate missing production inputs.
 
+## Process clock
+
+For the implemented same-process clock, call [`sourceauthority.NewProcessClock()`](../../../../signer/internal/sourceauthority/clock.go), handle its error, and retain the returned `*ProcessClock` for injection into `New(policy, source, clock)` outside request handling. Do not copy it after construction. Concurrent reads are serialized; its zero value refuses. Construction starts a random, nonpersistent epoch, not a restored lease or caller-selected clock.
+
+An unknown sample, discontinuity or process-identity change permanently disables that instance. Do not retry it as recovery, silently reset it, substitute the fixture clock, or continue with an old qualification. Construct a new instance and perform complete `BeforeBuild` / `BeforeSign` qualification, including a fresh authenticated `Source.Read`. A new process or instance cannot inherit the previous epoch's qualification. `CheckFreshness` checks only a local lease and cannot replace the independent presign read.
+
+Read the [process-clock contract](../../../../signer/docs/sourceauthority-clock.md) for measured `SampleSpan`, conservative expiry and refusal rules before implementing another clock adapter. The landed clock does not attest absolute UTC accuracy, suspend/rate behavior or target host admission. Existing [clock controls](../../../../signer/internal/sourceauthority/clock_test.go) include real same-process construction/concurrent reads and synthetic latched-fault/requalification cases; they do not qualify a native host.
+
 ## Run the inert fixture and its nearby refusal
 
 [`signer/examples/source-adapter/main.go`](../../../../signer/examples/source-adapter/main.go) implements and wires an in-memory refusing source and fixed clock. Its policy, public test-vector bytes, aliases, hashes and limits are synthetic; none selects a real owner, provider or repository. It reads no files, generates no private keys, opens no sockets, spawns no child process and performs no build, signing or native operation itself.
