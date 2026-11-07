@@ -20,7 +20,17 @@ import (
 type workerSpec struct {
 	executable, dir string
 	argv, env       []string
+	// completion is a private synchronization seam for offline source controls.
+	// It is nil in ordinary use and must not change worker results.
+	completion func(string)
 }
+
+func (s workerSpec) observeCompletion(event string) {
+	if s.completion != nil {
+		s.completion(event)
+	}
+}
+
 type workerResult struct {
 	Log            []byte
 	Exit           int
@@ -67,14 +77,22 @@ func supervise(ctx context.Context, s workerSpec, logBytes uint64, termination t
 	}
 	write.Close()
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		e := cmd.Wait()
+		s.observeCompletion("wait-ready")
+		done <- e
+	}()
 	type logResult struct {
 		b   []byte
 		err error
 	}
 	logs := make(chan logResult, 1)
 	// One extra byte detects truncation without retaining an unbounded stream.
-	go func() { b, e := io.ReadAll(io.LimitReader(read, int64(logBytes)+1)); logs <- logResult{b, e} }()
+	go func() {
+		b, e := io.ReadAll(io.LimitReader(read, int64(logBytes)+1))
+		s.observeCompletion("logs-ready")
+		logs <- logResult{b, e}
+	}()
 	var b []byte
 	var waitErr error
 	waited := false
@@ -82,7 +100,9 @@ func supervise(ctx context.Context, s workerSpec, logBytes uint64, termination t
 	select {
 	case waitErr = <-done:
 		waited = true
+		s.observeCompletion("wait")
 	case lr := <-logs:
+		s.observeCompletion("logs")
 		b = lr.b
 		logRead = true
 		if lr.err != nil {
@@ -94,6 +114,7 @@ func supervise(ctx context.Context, s workerSpec, logBytes uint64, termination t
 			select {
 			case waitErr = <-done:
 				waited = true
+				s.observeCompletion("wait")
 			case <-ctx.Done():
 				err = ctx.Err()
 			}
@@ -130,6 +151,7 @@ func supervise(ctx context.Context, s workerSpec, logBytes uint64, termination t
 		timer.Stop()
 	}
 	if !logRead {
+		s.observeCompletion("drain")
 		timer := time.NewTimer(time.Until(cleanupDeadline))
 		select {
 		case lr := <-logs:
@@ -159,6 +181,13 @@ func supervise(ctx context.Context, s workerSpec, logBytes uint64, termination t
 	result.Log = b
 	if waitErr != nil {
 		err = errors.Join(err, ErrWorker)
+	}
+	s.observeCompletion("accept")
+	// Success is accepted only after reaping and drain. Reconcile the original
+	// job here even when Wait or EOF won an earlier select against cancellation.
+	// Keep independent worker, log and cleanup failures as refusal causes.
+	if e := ctx.Err(); e != nil && !errors.Is(err, e) {
+		err = errors.Join(err, e)
 	}
 	return result, err
 }

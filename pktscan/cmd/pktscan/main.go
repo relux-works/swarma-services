@@ -2,10 +2,8 @@
 package main
 
 import (
-	"archive/tar"
-	"archive/zip"
 	"bytes"
-	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,6 +11,10 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
+
+	"github.com/relux-works/swarma-services/pktscan/internal/secretclass"
+	"github.com/relux-works/swarma-services/pktscan/packetwalk"
 	"regexp"
 	"regexp/syntax"
 	"sort"
@@ -36,15 +38,18 @@ const (
 
 // All outward errors are fixed strings. Never wrap an OS, archive or regexp error.
 var (
-	errArgs    = errors.New("invalid arguments")
-	errInput   = errors.New("input refused")
-	errPattern = errors.New("patterns refused")
-	errBase    = errors.New("known-base list refused")
-	errArchive = errors.New("archive refused")
-	errLimit   = errors.New("limit exceeded")
-	errOutput  = errors.New("output refused")
-	errChanged = errors.New("input changed")
-	errPatch   = errors.New("patch refused")
+	errArgs     = errors.New("invalid arguments")
+	errInput    = errors.New("input refused")
+	errPattern  = errors.New("patterns refused")
+	errBase     = errors.New("known-base list refused")
+	errArchive  = errors.New("archive refused")
+	errLimit    = errors.New("limit exceeded")
+	errOutput   = errors.New("output refused")
+	errChanged  = errors.New("input changed")
+	errPatch    = errors.New("patch refused")
+	errSecret   = errors.New("blocking secret class refused")
+	errClassify = errors.New("secret classification incomplete")
+	errBundle   = errors.New("bundle refused")
 )
 
 type counts struct {
@@ -55,8 +60,13 @@ type counts struct {
 }
 
 type result struct {
-	New   counts `json:"new"`
-	Known counts `json:"known_base"`
+	New              counts             `json:"new"`
+	Known            counts             `json:"known_base"`
+	Secrets          secretclass.Counts `json:"blocking"`
+	Objects          counts             `json:"git_objects"`
+	Metadata         counts             `json:"metadata"`
+	Traversal        packetwalk.Report  `json:"traversal"`
+	BaselineExcluded bool               `json:"baseline_content_excluded"`
 }
 
 type input struct {
@@ -87,16 +97,40 @@ func run(args []string, out, diagnostic io.Writer) (code int) {
 	flags.SetOutput(io.Discard)
 	patternName := flags.String("patterns", "", "")
 	baseName := flags.String("known-base", "", "")
+	bundlePath := flags.String("bundle-path", "", "")
+	current := flags.String("current", "", "")
+	base := flags.String("base", "", "")
+	baseBundle := flags.String("base-bundle", "", "")
+	gitPath := flags.String("git", "/usr/bin/git", "")
+	limits := packetwalk.DefaultLimits()
+	flags.IntVar(&limits.Depth, "max-depth", limits.Depth, "")
+	flags.IntVar(&limits.Files, "max-files", limits.Files, "")
+	flags.IntVar(&limits.Entries, "max-entries", limits.Entries, "")
+	flags.IntVar(&limits.Containers, "max-containers", limits.Containers, "")
+	flags.IntVar(&limits.Commands, "max-commands", limits.Commands, "")
+	flags.Int64Var(&limits.FileBytes, "max-file-bytes", limits.FileBytes, "")
+	flags.Int64Var(&limits.CompressedBytes, "max-compressed-bytes", limits.CompressedBytes, "")
+	flags.Int64Var(&limits.ExpandedBytes, "max-expanded-bytes", limits.ExpandedBytes, "")
+	flags.Int64Var(&limits.StreamBytes, "max-stream-bytes", limits.StreamBytes, "")
+	flags.Int64Var(&limits.CommandBytes, "max-command-bytes", limits.CommandBytes, "")
+	flags.DurationVar(&limits.Duration, "timeout", limits.Duration, "")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || *patternName == "" {
 		_, _ = io.WriteString(diagnostic, "pktscan: invalid arguments\n")
 		return 2
 	}
-	r, err := scan(args[0], *patternName, *baseName)
+	if !limits.Valid() || limits.FileBytes > maxFile ||
+		(*bundlePath == "") != (*current == "") || (*base == "") != (*baseBundle == "") ||
+		(*base != "" && *current == "") || (*bundlePath != "" && !safePath(*bundlePath)) {
+		_, _ = io.WriteString(diagnostic, "pktscan: invalid arguments\n")
+		return 2
+	}
+	cfg := scanOptions{limits: limits, bundlePath: *bundlePath, current: *current, base: *base, baseBundle: *baseBundle, gitPath: *gitPath}
+	r, err := scanWithOptions(args[0], *patternName, *baseName, cfg)
 	if err != nil {
 		// Explicit allowlist also protects this boundary from future wrapped errors.
 		message := "operation failed"
 		switch err {
-		case errArgs, errInput, errPattern, errBase, errArchive, errLimit, errOutput, errChanged, errPatch:
+		case errArgs, errInput, errPattern, errBase, errArchive, errLimit, errOutput, errChanged, errPatch, errSecret, errClassify, errBundle:
 			message = err.Error()
 		}
 		_, _ = io.WriteString(diagnostic, "pktscan: "+message+"\n")
@@ -254,7 +288,43 @@ func knownPaths(data []byte) (map[string]bool, error) {
 	return known, nil
 }
 
-func scan(dir, patternName, baseName string) (res result, err error) {
+type scanOptions struct {
+	limits                                         packetwalk.Limits
+	bundlePath, current, base, baseBundle, gitPath string
+}
+
+func scan(dir, patternName, baseName string) (result, error) {
+	return scanWithOptions(dir, patternName, baseName, scanOptions{limits: packetwalk.DefaultLimits()})
+}
+
+func classify(name string, data []byte) error {
+	format := secretclass.Auto
+	switch strings.ToLower(path.Ext(name)) {
+	case ".json":
+		format = secretclass.JSON
+	case ".jsonl", ".ndjson":
+		return errClassify
+	}
+	c, e := secretclass.Classify(data, format)
+	if e != nil {
+		if e == secretclass.ErrLimit {
+			return errLimit
+		}
+		return errClassify
+	}
+	if c.Blocking() {
+		return errSecret
+	}
+	return nil
+}
+
+func classifyPath(name string) error {
+	// Paths are text, not serialized JSON; Auto can conservatively refuse a
+	// JSON-looking path. Never turn that refusal into a clean result.
+	return classify("", []byte(name))
+}
+
+func scanWithOptions(dir, patternName, baseName string, cfg scanOptions) (res result, err error) {
 	data, patternInfo, e := readConfig(patternName, maxPatternFile)
 	if e != nil {
 		return res, errPattern
@@ -287,22 +357,200 @@ func scan(dir, patternName, baseName string) (res result, err error) {
 	if _, e = root.Lstat(outputDir); !errors.Is(e, fs.ErrNotExist) {
 		return res, errOutput
 	}
-	files, archives, e := inventory(root, patternInfo, baseInfo)
+	files, _, e := inventory(root, patternInfo, baseInfo)
 	if e != nil {
 		return res, e
 	}
+	original := make(map[string]bool)
+	for _, f := range files {
+		original[f.name] = true
+	}
+	tmp := os.Getenv("TMPDIR")
+	if !filepath.IsAbs(tmp) {
+		return res, errOutput
+	}
+	ti, e := os.Lstat(tmp)
+	if e != nil || !ti.IsDir() || ti.Mode().Perm() != 0700 {
+		return res, errOutput
+	}
+	realDir, de := filepath.EvalSymlinks(dir)
+	realTmp, te := filepath.EvalSymlinks(tmp)
+	realDir, ae := filepath.Abs(realDir)
+	rel, re := filepath.Rel(realDir, realTmp)
+	if de != nil || te != nil || ae != nil || re != nil || rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return res, errOutput
+	}
+	stage, e := os.MkdirTemp(tmp, "pktscan-stage-")
+	if e != nil {
+		return res, errOutput
+	}
+	ownedOutput := false
+	defer func() {
+		if os.RemoveAll(stage) != nil {
+			if ownedOutput {
+				_ = root.RemoveAll(outputDir)
+			}
+			res = result{}
+			err = errOutput
+		}
+	}()
+	stageRoot, e := os.OpenRoot(stage)
+	if e != nil {
+		return res, errOutput
+	}
+	defer stageRoot.Close()
+	extracted := func(name string) bool {
+		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
+			if original[parent] {
+				return true
+			}
+		}
+		return false
+	}
 	s := &scanner{patterns: compiled, known: known}
-	var dest *os.Root
-	complete := false
-	if archives != 0 {
+	var visitorErr error
+	fail := func(e error) error {
+		if e != nil {
+			visitorErr = e
+		}
+		return e
+	}
+	opts := packetwalk.Options{Limits: cfg.limits, Exclude: []fs.FileInfo{patternInfo, baseInfo}}
+	opts.Path = func(ctx context.Context, name string, directory bool, origin packetwalk.Origin) error {
+		if e := classifyPath(name); e != nil {
+			return fail(e)
+		}
+		if directory && origin != packetwalk.GitSourcePath && extracted(name) && stageRoot.MkdirAll(name, 0700) != nil {
+			return fail(errOutput)
+		}
+		return ctx.Err()
+	}
+	opts.ValidateControl = func(ctx context.Context, f packetwalk.File) error {
+		info, e := root.Lstat(f.LogicalPath)
+		if e != nil {
+			return fail(errInput)
+		}
+		if baseInfo != nil && os.SameFile(info, baseInfo) {
+			paths, e := knownPaths(f.Bytes)
+			if e != nil {
+				return fail(errBase)
+			}
+			for p := range paths {
+				if e = classifyPath(p); e != nil {
+					return fail(e)
+				}
+			}
+			return ctx.Err()
+		}
+		return fail(classify("", f.Bytes))
+	}
+	resolvedBundles := 0
+	if cfg.current != "" {
+		var baseline []byte
+		if cfg.baseBundle != "" {
+			// The baseline is trusted external scope evidence, never packet data.
+			baseline, _, e = readConfig(cfg.baseBundle, maxFile)
+			if e != nil {
+				return res, errBundle
+			}
+			bi, be := os.Stat(cfg.baseBundle)
+			if be != nil {
+				return res, errBundle
+			}
+			for _, f := range files {
+				if os.SameFile(bi, f.info) {
+					return res, errBundle
+				}
+			}
+			if os.SameFile(bi, patternInfo) || baseInfo != nil && os.SameFile(bi, baseInfo) {
+				return res, errBundle
+			}
+		}
+		opts.Git = &packetwalk.BundleOptions{GitPath: cfg.gitPath, TempDir: tmp,
+			Resolve: func(ctx context.Context, name string) (packetwalk.BundleScope, error) {
+				if name != cfg.bundlePath {
+					return packetwalk.BundleScope{}, errBundle
+				}
+				resolvedBundles++
+				return packetwalk.BundleScope{Current: cfg.current, Base: cfg.base, BaseBundle: baseline}, ctx.Err()
+			}}
+	}
+	report, e := packetwalk.Walk(context.Background(), root, opts, func(ctx context.Context, f packetwalk.File) error {
+		className := f.LogicalPath
+		if f.FormatHint == "stream" {
+			return fail(errClassify)
+		}
+		if f.FormatHint == "json" {
+			className = "object.json"
+		}
+		if e := classify(className, f.Bytes); e != nil {
+			return fail(e)
+		}
+		if e := classifyPath(f.LogicalPath); e != nil {
+			return fail(e)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if f.Origin == packetwalk.ArchiveMetadata {
+			return fail(s.full(f.Bytes, f.LogicalPath, &s.result.Metadata))
+		}
+		if f.Origin == packetwalk.GitMetadata || f.Origin == packetwalk.GitBlobContent {
+			bucket := &s.result.Metadata
+			if f.Origin == packetwalk.GitBlobContent {
+				bucket = &s.result.Objects
+			}
+			if e := s.full(f.Bytes, f.LogicalPath, bucket); e != nil {
+				return fail(e)
+			}
+		} else if e := s.file(bytes.NewReader(f.Bytes), f.LogicalPath); e != nil {
+			return fail(e)
+		}
+		if extracted(f.LogicalPath) {
+			if stageRoot.MkdirAll(path.Dir(f.LogicalPath), 0700) != nil {
+				return fail(errOutput)
+			}
+			out, e := stageRoot.OpenFile(f.LogicalPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if e != nil {
+				return fail(errOutput)
+			}
+			_, e = out.Write(f.Bytes)
+			ce := out.Close()
+			if e != nil || ce != nil {
+				return fail(errOutput)
+			}
+		}
+		return nil
+	})
+	if e != nil {
+		if visitorErr != nil {
+			return res, visitorErr
+		}
+		switch e {
+		case packetwalk.ErrLimit:
+			return res, errLimit
+		case packetwalk.ErrArchive:
+			return res, errArchive
+		case packetwalk.ErrBundle:
+			return res, errBundle
+		case packetwalk.ErrChanged:
+			return res, errChanged
+		case packetwalk.ErrCleanup:
+			return res, errOutput
+		default:
+			return res, errInput
+		}
+	}
+	if cfg.current != "" && resolvedBundles != 1 {
+		return res, errBundle
+	}
+	if report.Containers != 0 {
 		if root.Mkdir(outputDir, 0700) != nil {
 			return res, errOutput
 		}
-		// Only this exclusively created tree is ever removed. No preexisting tree is owned.
+		ownedOutput = true
+		complete := false
 		defer func() {
-			if dest != nil {
-				_ = dest.Close()
-			}
 			if !complete && root.RemoveAll(outputDir) != nil {
 				err = errOutput
 			}
@@ -310,43 +558,73 @@ func scan(dir, patternName, baseName string) (res result, err error) {
 		if root.Mkdir(outputDir+"/stage", 0700) != nil {
 			return res, errOutput
 		}
-		dest, e = root.OpenRoot(outputDir + "/stage")
+		dest, e := root.OpenRoot(outputDir + "/stage")
 		if e != nil {
 			return res, errOutput
 		}
-	}
-	x := &extractor{dest: dest, scan: s}
-	for _, in := range files {
-		f, e := openInput(root, in)
-		if e != nil {
-			return res, e
-		}
-		if kind := archiveKind(in.name); kind != "" {
-			e = x.extract(f, in, kind)
-		} else {
-			e = s.file(f, in.name)
-		}
-		after, statErr := f.Stat()
-		closeErr := f.Close()
-		if e != nil {
-			return res, e
-		}
-		if statErr != nil || closeErr != nil || !unchanged(in.info, after) {
-			return res, errChanged
-		}
-	}
-	if dest != nil {
-		if dest.Close() != nil {
-			dest = nil
+		e = fs.WalkDir(stageRoot.FS(), ".", func(n string, d fs.DirEntry, er error) error {
+			if er != nil {
+				return errOutput
+			}
+			if n == "." {
+				return nil
+			}
+			if d.IsDir() {
+				if dest.MkdirAll(n, 0700) != nil {
+					return errOutput
+				}
+				return nil
+			}
+			in, er := stageRoot.Open(n)
+			if er != nil {
+				return errOutput
+			}
+			out, er := dest.OpenFile(n, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if er != nil {
+				in.Close()
+				return errOutput
+			}
+			_, er = io.Copy(out, in)
+			ce := out.Close()
+			ie := in.Close()
+			if er != nil || ce != nil || ie != nil {
+				return errOutput
+			}
+			return nil
+		})
+		ce := dest.Close()
+		if e != nil || ce != nil {
 			return res, errOutput
 		}
-		dest = nil
 		if root.Rename(outputDir+"/stage", outputDir+"/files") != nil {
 			return res, errOutput
 		}
+		complete = true
 	}
-	complete = true
+	s.result.BaselineExcluded = cfg.base != ""
+	s.result.Traversal = report
 	return s.result, nil
+}
+
+func (s *scanner) full(data []byte, name string, c *counts) error {
+	c.Files++
+	if s.match([]byte(name)) {
+		c.PathHits++
+	}
+	hits := 0
+	if e := eachLine(data, func(line []byte) error {
+		if s.match(line) {
+			hits++
+		}
+		return nil
+	}); e != nil {
+		return e
+	}
+	c.HitLines += hits
+	if hits != 0 {
+		c.HitFiles++
+	}
+	return nil
 }
 
 func inventory(root *os.Root, patternInfo, baseInfo fs.FileInfo) ([]input, int, error) {
@@ -462,9 +740,9 @@ func (s *scanner) file(r io.Reader, name string) error {
 	if s.match([]byte(name)) {
 		c.PathHits++
 	}
-	// Binary files remain in files/pathhits, but have no content hits.
+	// Defensive refusal: the walker already rejects binary leaves.
 	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
-		return nil
+		return errClassify
 	}
 	hits := 0
 	if strings.HasSuffix(name, ".patch") || strings.HasSuffix(name, ".diff") {
@@ -541,6 +819,13 @@ func (s *scanner) patch(data []byte) (int, error) {
 			}
 			return nil
 		}
+		// Binary diff records contain no supported text to scan. Check only
+		// outside a live hunk: its prefixed content is ordinary added/old text.
+		metadata := bytes.TrimSuffix(line, []byte{'\r'})
+		if bytes.Equal(metadata, []byte("GIT binary patch")) ||
+			bytes.HasPrefix(metadata, []byte("Binary files ")) && bytes.HasSuffix(metadata, []byte(" differ")) {
+			return errPatch
+		}
 		if !bytes.HasPrefix(line, []byte("@@")) {
 			return nil
 		}
@@ -601,143 +886,4 @@ func safePath(name string) bool {
 		}
 	}
 	return true
-}
-
-type extractor struct {
-	dest        *os.Root
-	scan        *scanner
-	entries     int
-	bytes       int64
-	streamBytes int64
-}
-
-func (x *extractor) member(archive, name string, mode fs.FileMode, size int64, r io.Reader) error {
-	x.entries++
-	if x.entries > maxEntries {
-		return errLimit
-	}
-	if mode.IsDir() {
-		name = strings.TrimSuffix(name, "/")
-	}
-	logical := archive + "/" + name
-	if !safePath(logical) || (mode.Type() != 0 && mode.Type() != os.ModeDir) {
-		return errArchive
-	}
-	if mode.IsDir() {
-		if size != 0 {
-			return errArchive
-		}
-		data, e := io.ReadAll(io.LimitReader(r, 1))
-		if e != nil || len(data) != 0 {
-			return errArchive
-		}
-		if x.dest.MkdirAll(logical, 0700) != nil {
-			return errArchive
-		}
-		return nil
-	}
-	if archiveKind(name) != "" {
-		return errArchive
-	}
-	if size < 0 || size > maxFile || size > maxTotal-x.bytes {
-		return errLimit
-	}
-	data, e := io.ReadAll(io.LimitReader(r, size+1))
-	if e != nil || int64(len(data)) != size {
-		return errArchive
-	}
-	// Refuse nested containers even when their filename hides the type.
-	if bytes.HasPrefix(data, []byte("PK\x03\x04")) || bytes.HasPrefix(data, []byte("PK\x05\x06")) || bytes.HasPrefix(data, []byte("PK\x07\x08")) || bytes.HasPrefix(data, []byte{0x1f, 0x8b}) || (len(data) >= 262 && string(data[257:262]) == "ustar") {
-		return errArchive
-	}
-	x.bytes += size
-	if x.dest.MkdirAll(path.Dir(logical), 0700) != nil {
-		return errArchive
-	}
-	f, e := x.dest.OpenFile(logical, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if e != nil {
-		return errArchive
-	}
-	_, e = f.Write(data)
-	ce := f.Close()
-	if e != nil || ce != nil {
-		return errOutput
-	}
-	return x.scan.file(bytes.NewReader(data), logical)
-}
-
-func (x *extractor) extract(f *os.File, in input, kind string) error {
-	if kind == "zip" {
-		zr, e := zip.NewReader(f, in.info.Size())
-		if e != nil {
-			return errArchive
-		}
-		if len(zr.File) > maxEntries-x.entries {
-			return errLimit
-		}
-		for _, z := range zr.File {
-			if z.UncompressedSize64 > maxFile {
-				return errLimit
-			}
-			r, e := z.Open()
-			if e != nil {
-				return errArchive
-			}
-			e = x.member(in.name, z.Name, z.Mode(), int64(z.UncompressedSize64), r)
-			ce := r.Close()
-			if e != nil {
-				return e
-			}
-			if ce != nil {
-				return errArchive
-			}
-		}
-		return nil
-	}
-	var reader io.Reader = f
-	var gz *gzip.Reader
-	if kind == "tgz" {
-		var e error
-		gz, e = gzip.NewReader(f)
-		if e != nil {
-			return errArchive
-		}
-		defer gz.Close()
-		reader = gz
-	}
-	// Bound the entire tar stream, including padding and metadata, before tar parses it.
-	allowance := maxTotal - x.streamBytes
-	limited := &io.LimitedReader{R: reader, N: allowance + 1}
-	tr := tar.NewReader(limited)
-	for {
-		h, e := tr.Next()
-		if e == io.EOF {
-			break
-		}
-		if limited.N <= 0 {
-			return errLimit
-		}
-		if e != nil {
-			return errArchive
-		}
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA && h.Typeflag != tar.TypeDir {
-			return errArchive
-		}
-		if e = x.member(in.name, h.Name, h.FileInfo().Mode(), h.Size, tr); e != nil {
-			return e
-		}
-	}
-	// Drain bounded trailing data: verifies gzip CRC/truncation and refuses concatenated payloads.
-	trailing, e := io.ReadAll(io.LimitReader(limited, (1<<20)+1))
-	if limited.N <= 0 {
-		return errLimit
-	}
-	if e != nil {
-		return errArchive
-	}
-	if len(trailing) > 1<<20 || len(bytes.Trim(trailing, "\x00")) != 0 {
-		return errArchive
-	}
-	x.streamBytes += allowance + 1 - limited.N
-	return nil
 }

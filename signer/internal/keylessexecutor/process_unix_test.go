@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -32,6 +33,8 @@ func TestOfflineWorker(t *testing.T) {
 		fmt.Print("OFFLINE SYNTHETIC CLOSED ENVIRONMENT\n")
 	case "fail":
 		os.Exit(29)
+	case "finite-log":
+		fmt.Print(strings.Repeat("F", 2048))
 	case "flood":
 		for {
 			fmt.Print(strings.Repeat("F", 4096))
@@ -192,4 +195,160 @@ func TestArtifactFIFORefusesWithoutBlocking(t *testing.T) {
 		t.Fatal("FIFO blocked artifact open")
 	}
 	emptyParent(t, parent)
+}
+
+// terminalContext deterministically exposes either cancellation reason at a
+// completion barrier, without relying on wall-clock races or repeated selects.
+type terminalContext struct {
+	context.Context
+	reason error
+}
+
+func (c terminalContext) Err() error {
+	if c.Context.Err() != nil {
+		return c.reason
+	}
+	return nil
+}
+
+func TestTerminalCancellation(t *testing.T) {
+	for _, route := range []string{"wait-first", "EOF-first"} {
+		for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+			for _, at := range []string{"none", "wait", "accept", "drain"} {
+				if route == "EOF-first" && at == "drain" {
+					continue // EOF is already drained on this route.
+				}
+				t.Run(route+"/"+cause.Error()+"/"+at, func(t *testing.T) {
+					testTerminalCompletion(t, route, at, "env", cause, nil)
+				})
+			}
+		}
+	}
+	for _, route := range []string{"wait-first", "EOF-first"} {
+		t.Run(route+"/nonzero-with-cancellation", func(t *testing.T) {
+			testTerminalCompletion(t, route, "accept", "fail", context.Canceled, ErrWorker)
+		})
+	}
+	t.Run("log-limit-with-cancellation", func(t *testing.T) {
+		testTerminalCompletion(t, "wait-first", "accept", "finite-log", context.Canceled, ErrLimit)
+	})
+	t.Run("cleanup-budget-with-cancellation", func(t *testing.T) {
+		testTerminalCompletion(t, "wait-first", "cleanup", "env", context.Canceled, ErrCleanup)
+	})
+}
+
+func testTerminalCompletion(t *testing.T, route, at, mode string, cause, refusal error) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := terminalContext{base, cause}
+	release := make(chan struct{})
+	logPublished := make(chan struct{})
+	waitPublished := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	await := func(ch <-chan struct{}) {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ch:
+		case <-timer.C:
+			panic("offline completion barrier exceeded two-second bound")
+		}
+	}
+	var events []string // Only supervisor callbacks write this slice.
+	observe := func(event string) {
+		switch event {
+		case "wait-ready":
+			if route == "EOF-first" {
+				await(release)
+			}
+			close(waitPublished)
+			return
+		case "logs-ready":
+			if route == "wait-first" {
+				await(release)
+				if at == "drain" {
+					cancel() // Cancellation is visible before drain can complete.
+				}
+			}
+			close(logPublished)
+			return
+		}
+		events = append(events, event)
+		if event == at {
+			cancel()
+		}
+		if route == "EOF-first" && event == "logs" {
+			unblock()
+		}
+		if route == "wait-first" && event == "wait" && at != "drain" && at != "cleanup" {
+			unblock()
+		}
+		if route == "wait-first" && event == "drain" && at == "drain" {
+			unblock()
+		}
+		if at == "cleanup" {
+			if event == "drain" {
+				cancel()
+			}
+			if event == "accept" {
+				unblock() // Withhold EOF publication until the shared budget expires.
+			}
+		}
+	}
+	limit := uint64(4096)
+	if mode == "finite-log" {
+		limit = 1024
+	}
+	const termination = 80 * time.Millisecond
+	start := time.Now()
+	r, err := supervise(ctx, workerSpec{
+		executable: exe, dir: filepath.Dir(exe),
+		argv: []string{"-test.run=^TestOfflineWorker$"},
+		env:  []string{"KEYLESS_OFFLINE_CONTROL=" + mode}, completion: observe,
+	}, limit, termination)
+	elapsed := time.Since(start)
+	await(logPublished)
+	await(waitPublished)
+	t.Logf("route=%s cancel_at=%s reason=%v events=%v UTC=%s..%s exit=%d signal=%q log_bytes=%d termination=%s elapsed=%s err=%v", route, at, cause, events, r.Started.Format(time.RFC3339Nano), r.Ended.Format(time.RFC3339Nano), r.Exit, r.Signal, len(r.Log), termination, elapsed, err)
+	first := "wait"
+	if route == "EOF-first" {
+		first = "logs"
+	}
+	if len(events) == 0 || events[0] != first {
+		t.Fatalf("terminal route was not forced: %v", events)
+	}
+	wantExit := 0
+	if mode == "fail" {
+		wantExit = 29
+	}
+	if r.Exit != wantExit || r.Signal != "" || r.Started.IsZero() || r.Ended.Before(r.Started) {
+		t.Fatalf("actual child outcome lost: %+v", r)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatal("supervisor exceeded bounded control allowance")
+	}
+	if refusal != nil && !errors.Is(err, refusal) {
+		t.Fatalf("independent refusal lost: want %v, got %v", refusal, err)
+	}
+	if mode == "finite-log" && len(r.Log) != 0 {
+		t.Fatal("over-limit log retained")
+	}
+	if at == "none" {
+		if err != nil || !strings.Contains(string(r.Log), "CLOSED ENVIRONMENT") {
+			t.Fatalf("uncancelled neighbor refused: %v", err)
+		}
+		cancel() // Cancellation after committed success cannot change that result.
+		if err != nil {
+			t.Fatal("post-return cancellation changed success")
+		}
+	} else if !errors.Is(err, cause) {
+		t.Fatalf("terminal cancellation lost: want %v, got %v", cause, err)
+	}
 }

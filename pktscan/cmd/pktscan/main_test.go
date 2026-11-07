@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/relux-works/swarma-services/pktscan/packetwalk"
 )
 
 func put(t *testing.T, name string, data []byte) {
@@ -34,7 +36,7 @@ func setup(t *testing.T) (string, string) {
 
 func check(t *testing.T, got, want result) {
 	t.Helper()
-	if got != want {
+	if got.New != want.New || got.Known != want.Known || got.Secrets != want.Secrets || got.Objects != want.Objects || got.Metadata != want.Metadata {
 		t.Fatalf("count mismatch: got %+v; want %+v", got, want)
 	}
 }
@@ -105,8 +107,6 @@ func TestCountsKnownPathsAndControls(t *testing.T) {
 	d, p := setup(t)
 	put(t, filepath.Join(d, "SYNTHETIC-TOKEN-new"), []byte("SYNTHETIC TOKEN TOKEN\nclean\nTOKEN"))
 	put(t, filepath.Join(d, "base\nTOKEN"), []byte("SYNTHETIC\n"))
-	put(t, filepath.Join(d, "binary"), []byte("SYNTHETIC\x00TOKEN"))
-	put(t, filepath.Join(d, "invalid-utf8"), []byte{0xff, 'T', 'O', 'K', 'E', 'N'})
 	put(t, filepath.Join(d, "empty"), nil)
 	base := filepath.Join(d, "base-list")
 	put(t, base, []byte("base\nTOKEN\x00"))
@@ -117,7 +117,7 @@ func TestCountsKnownPathsAndControls(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	check(t, r, result{New: counts{Files: 4, HitFiles: 1, HitLines: 2, PathHits: 1}, Known: counts{Files: 1, HitFiles: 1, HitLines: 1, PathHits: 1}})
+	check(t, r, result{New: counts{Files: 2, HitFiles: 1, HitLines: 2, PathHits: 1}, Known: counts{Files: 1, HitFiles: 1, HitLines: 1, PathHits: 1}})
 }
 
 func TestUnifiedPatchAddedOnly(t *testing.T) {
@@ -264,7 +264,7 @@ func TestArchiveLogicalPathDepth(t *testing.T) {
 						d, p := setup(t)
 						archive := prefix + "packet." + kind
 						archiveDepth := len(strings.Split(archive, "/"))
-						name := strings.Repeat("d/", depth-archiveDepth-1) + "leaf"
+						name := strings.Repeat("d/", depth-archiveDepth-1) + "d"
 						logical := archive + "/" + name
 						subject := member{name: name, data: "TOKEN\n"}
 						want := result{Known: counts{Files: 2, HitFiles: 2, HitLines: 2}}
@@ -366,7 +366,7 @@ func TestZipBombAndEntryLimit(t *testing.T) {
 		t.Fatal("zip bomb accepted")
 	}
 	d, p = setup(t)
-	members := make([]member, maxEntries+1)
+	members := make([]member, packetwalk.DefaultLimits().Entries+1)
 	for i := range members {
 		members[i].name = "item"
 	} // Limit must precede duplicate-name detection.

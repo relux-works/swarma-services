@@ -1,12 +1,16 @@
 # pktscan
 
-`pktscan` extracts a bounded packet and reports **counts only**. It never executes
-packet contents. Success writes one JSON object to stdout; failures write a fixed
-diagnostic to stderr and no counts. Neither channel includes input names, pattern
-text, matched values, regexp diagnostics, or archive diagnostics.
+`pktscan` classifies bounded packets without disclosing contents or matches.
+A successful invocation emits one JSON count report. Any secret, incomplete
+classification, malformed input, integrity error or exceeded bound emits only a
+fixed diagnostic and exits 1; it emits no counts or partial extracted output.
+Argument errors exit 2. `DIR` precedes flags; `--help` is an argument error.
 
-From this `pktscan/` subproject, build with Go **1.26.8** (Linux is the supported
-and tested platform):
+This Linux composition is a **local candidate**. Fresh independent whole-head
+review and the source owner's marker/checks are required before publication or
+installed use. No acceptance, deployment or landing is implied.
+
+Build with the unchanged Go 1.26.8 toolchain from this independent subproject:
 
 ```sh
 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go build ./cmd/pktscan
@@ -14,53 +18,83 @@ GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go build ./cmd/pktscan
   --known-base /absolute/known-paths.nul
 ```
 
-`DIR` must precede the flags. `--known-base` is optional. This module has no
-third-party dependencies and requires no network, external scanner, shell, cache,
-or provider at runtime. There is no automatic dependency or toolchain upgrade.
-Exit status is 0 on success, 2 for argument errors, and 1 for refused input or
-operation failures. `--help` is an argument error; usage is documented here.
+`--known-base` is optional. Set `TMPDIR` to an existing absolute private 0700
+directory outside the packet. Run the command offline with read-only trusted
+source/tools, private 0700 HOME/TMP/cache, no host home, keys, sockets or foreign
+cache, and an outer hard process timeout. The command is not an OS sandbox.
+No third-party modules, dependency/toolchain upgrades, providers or network are
+required. Only bundle inspection additionally requires trusted native Git.
 
-Example output (illustrative counts):
+## Secret blocking and refusal
 
-```json
-{"new":{"files":3,"hitfiles":1,"hitlines":2,"pathhits":1},"known_base":{"files":1,"hitfiles":1,"hitlines":1,"pathhits":0}}
-```
+Every complete text leaf and every input/member path is classified before ERE
+matching, known-base bucketing or patch-line filtering. Recognizable JSON is
+parsed strictly regardless of filename; `.json` files, including scalar JSON
+and Git blobs with that source suffix, always use strict document parsing.
+`.jsonl` and `.ndjson` are unsupported and refuse. NUL, invalid UTF-8, BOM,
+unpaired JSON surrogate escapes, incomplete/trailing/malformed JSON and exceeded
+classifier bounds refuse. Errors invalidate every earlier callback and count.
 
-## Count contract
+The blocking classes are decoded ASCII case-insensitive exact JSON field names
+`temp_clone_token`, `token` and `secret`, at any object depth, when populated;
+and conservative GitHub token shapes in decoded JSON keys/strings or ordinary
+text. Null, empty string/array/object are empty. Whitespace strings, numbers,
+booleans and nonempty containers are populated. Duplicate keys are independently
+classified. Classic prefixes gh[pousr]_ require at least 36 ASCII alphanumerics;
+the fine-grained prefix github_pat_ requires at least 82 ASCII alphanumerics or
+underscores. Longer/embedded shapes block; unprefixed hashes are not shapes.
+These rules do not establish credential validity or live status.
 
-Each accepted regular file has a logical relative path with `/` separators.
-An ordinary file's logical path is its path relative to `DIR`. An extracted
-member's logical path is `<archive-relative-path>/<member-path>`, for example
-`pack.zip/notes.txt`. Output-directory prefixes are **not** part of logical paths.
+Positive blocking counts refuse the entire invocation, including known-base
+paths, removed/context/metadata patch lines, empty-container/directory paths,
+Git headers/commits/trees/path metadata and archive textual metadata. No matched
+value, parser offset, tool stderr or sensitive path appears in diagnostics.
+In-packet pattern/known-base controls and their hard-link aliases are audited,
+then excluded from ERE counts by identity. NUL-delimited known-base controls are
+validated and classified one complete path at a time. External controls are not
+packet members and are not exported or claimed safe.
 
-* `files`: regular files in that bucket, including empty and binary files.
-* `hitfiles`: files with at least one matching content line. A path-only hit does
-  not make a content hit file.
-* `hitlines`: matching content lines, at most once per line across all patterns
-  and all occurrences. A final line without LF counts; a trailing LF does not
-  create an extra line. Empty files have zero lines; blank lines in nonempty
-  files can match a pattern such as `^$`.
-* `pathhits`: files whose entire logical path is tested against the patterns,
-  at most once per file. Directory paths and archive-container paths are not
-  separate candidates. Embedded newlines remain part of a path.
+The classifier bounds are 16 MiB per complete leaf, 1 MiB per decoded JSON
+key/string or text line, 128 JSON containers and 65,536 JSON values. There is no
+base64/URL/HTML/UTF-16 decoding, recursive parsing of JSON inside strings,
+arbitrary embedded-JSON extraction from logs or patch reconstruction. Ordinary
+text receives the token-shape policy, not a claim that every possible embedded
+serialization has been decoded. Supply complete JSON metadata as `.json`, or
+refuse unsupported representations before export. This is a packet policy
+check, not a general credential-discovery or sanitization service. Sanitize
+separate copies and seal their actual new bytes; an old seal cannot survive edits.
 
-`new` and `known_base` partition the files; add corresponding counts for totals.
-The known-base file is a **NUL-terminated list** of exact logical paths, not
-patterns, basenames, prefixes, or directory exclusions. Unlisted paths are new;
-listed paths are still scanned and their hits are reported separately. An empty
-list is valid. Unseen listed paths add no counts. Duplicate entries, empty
-entries, noncanonical or unsupported paths, and a missing final NUL are refused.
-NUL separation permits filenames containing LF. Matching is case-sensitive and
-does not normalize Unicode.
+## Count report
 
-The pattern file and known-base file, including hard-link aliases inside `DIR`,
-are excluded by file identity. Archive containers are replaced by their regular
-members in counts, not scanned again as raw bytes. Different member paths count
-as different files even if their bytes are equal; duplicate output file paths
-are refused. Original hard-linked data files count once per input path. All
-other regular input files, including hidden files and any caller-created cache,
-are candidates. The program creates no cache. Keep unrelated files outside
-`DIR`. Inventory precedes extraction, so staging/output files are never rescanned.
+The existing `new` and `known_base` buckets retain `files`, `hitfiles`, `hitlines`
+and `pathhits`. `files` counts ordinary complete text leaves, including empty
+files. Content hits count at most once per line across all EREs, and `hitfiles`
+counts leaves with any content hit. `pathhits` counts at most once per complete
+logical path. Containers/directories are not ordinary files. Names containing
+LF remain complete paths. Archive members use `outer.zip/inner.tgz/member`.
+
+`--known-base` is a NUL-terminated list of exact canonical logical paths. It is
+case-sensitive, not a prefix/pattern exclusion. Listed paths are still scanned;
+unseen names add no counts. Duplicate/empty/unsafe paths or a missing final NUL
+refuse. Original hard-linked data files count per path. Unknown files, hidden
+files and caller-created in-packet caches are candidates.
+
+`git_objects` uses the same four count fields for full classified blob contents,
+including recursively expanded blob packets. `metadata` uses those count fields
+for Git headers/commits/trees/full paths and supported archive textual metadata.
+These are separate from source-file buckets; no filename-to-blob multiplicity is
+claimed. Git blobs are scanned in full even when their source name ends in
+`.patch`; ordinary `.patch`/`.diff` leaves retain the added-line ERE behavior.
+`blocking` contains `github_tokens` and `secret_fields`, always zero on success.
+A refusal emits neither positive nor partial counts. Counts do not identify
+unique secrets. `baseline_content_excluded` explicitly states whether external
+Git baseline content was excluded by scope; excluded never means checked safe.
+
+`traversal` reports cumulative `Files`, `Entries`, `Containers`, `Commands`,
+`CompressedBytes`, `ExpandedBytes`, `StreamBytes`, `CommandBytes`, `Leaves`,
+`GitImportedObjects`, `GitBaseObjects` and `GitDeltaObjects`. These measure work,
+not original source size or ERE hits. Layers are deliberately charged again.
+A successful zero blocking count applies only to the documented classified scope.
 
 ## Bounded ERE dialect and text behavior
 
@@ -84,9 +118,9 @@ Go's POSIX mode uses leftmost-longest matching, although only a Boolean match
 affects counts. `^` and `$` anchor lines, including embedded LF in a path;
 `.` and negated bracket classes do not cross LF in this mode. A positive class
 or explicit escaped LF may match LF in a path. Content is tested one LF-delimited
-line at a time, so no pattern can span content lines. CR is retained. A file with
-any NUL or invalid UTF-8 is binary: it contributes `files` and possibly
-`pathhits`, but no content hits. No bytes are silently decoded or locale-folded.
+line at a time, so no pattern can span content lines. CR is retained. A leaf with NUL or invalid UTF-8 refuses the entire invocation. Binary leaves
+never produce successful zero content counts. No bytes are silently decoded or
+locale-folded.
 
 Files ending in **case-sensitive** `.patch` or `.diff` are interpreted as unified
 diffs. Only added content inside a valid `@@ -old[,count] +new[,count] @@` hunk
@@ -95,82 +129,117 @@ headings, context, removed lines, and additions outside hunks do not count.
 Hunk lengths are checked; malformed/truncated hunks and combined diffs are
 refused. An actual added line beginning with `++` has a `+++` patch prefix
 inside its hunk and **does** count. This distinguishes content from headers.
-Patch headers use LF; CR in a hunk header is not normalized. Binary patches use
-the binary-file rule above; non-hunk metadata alone adds no content hits.
+Patch headers use LF; CR in a hunk header is not normalized. Binary patches are refused; non-hunk metadata alone adds no content hits.
 
-## Extraction and limits
+## Nested archives and extraction
 
-Supported top-level archive suffixes are `.zip`, `.tar`, `.tar.gz`, and `.tgz`,
-case-insensitively. Other suffixes are ordinary files. Extraction happens under
-`DIR/.pktscan-unpacked`, created exclusively with mode 0700. Members are staged
-in `stage`, then published as `files` after the complete scan succeeds:
+ZIP, tar, tar.gz/tgz and bundle suffixes and recognizable magic select
+containers, including renamed/nested containers and archives inside Git blobs.
+The existing [packet walker](packetwalk/README.md) performs bounded recursive
+traversal. ZIP CRC/framing, exact compressed-member consumption and gzip/tar
+EOF/integrity are required. Deflate read-ahead cannot mask a trailing extent. Unsafe paths,
+links, special types, collisions and unsupported representations refuse.
+ZIP64/comments/encryption, ZIP extra fields (central and local), gzip extra
+fields, non-POSIX-USTAR tar headers, PAX/GNU/sparse tar extensions and nonzero
+tar member padding refuse. USTAR regular/directory headers require empty
+linkname, zero device fields/reserved padding, portable nonnegative octal
+numbers and zero padding after textual NUL terminators.
+Gzip names/comments and tar user/group names are classified as textual metadata.
+Unsupported metadata is never silently labeled clean.
 
-```text
-DIR/.pktscan-unpacked/files/pack.zip/notes.txt
+The walker supplies explicit content/path origins. Ordinary paths containing
+`.bundle/objects/` or `.bundle/source/` keep ordinary patch, known-base and
+extraction rules. Actual Git blobs and their recursively expanded members use
+full-object matching; Git source-path inventory callbacks are not extracted.
+
+All leaf checks finish before extracted output is published beneath the
+exclusively created `DIR/.pktscan-unpacked/files/`. Only complete regular member
+leaves and explicit member directories are staged in an external private tree.
+No packet bytes are executed or checked out. Members cannot clobber source or
+controls. The original containers remain unchanged. Existing reserved output of
+any type refuses, even on a repeated invocation. On refusal, private staging and
+any exclusively owned partial output are removed; cleanup failure is a fixed
+output refusal. Preexisting output is never removed. Extracted files are 0600,
+directories 0700; ownership/executable/archive metadata is not installed.
+
+`os.Root`, input identity/mode/size/mtime checks and canonical paths constrain
+resolution. The packet must be operator-owned and quiescent. This does not defend
+against malicious same-UID rewrites, restored metadata, existing hard links or
+mount changes. Keep controls/caches outside the packet where practical.
+
+## Git bundle full and delta scope
+
+Pin exactly one logical bundle path and an actual lowercase SHA-1 commit OID:
+
+```sh
+./pktscan /absolute/packet --patterns /absolute/patterns.txt \
+  --bundle-path source.zip/change.bundle --current COMMIT_OID \
+  --base BASE_COMMIT_OID --base-bundle /absolute/trusted-base.bundle \
+  --git /usr/bin/git
 ```
 
-The original archive and other source files are retained. No existing file is
-overwritten. Existing `.pktscan-unpacked` of any type makes the whole operation
-fail, including a subsequent invocation: explicitly move/remove that output
-yourself before rescanning the original packet. Each archive has its own
-namespace, so members named like input files or the pattern file cannot clobber
-them. Members are never recursively expanded. Recognizable nested archive
-suffixes and ZIP/gzip/ustar magic are refused; unrecognized nested bytes are
-ordinary bounded content, never another extraction pass.
+Omit both `--base` and `--base-bundle` for full Current closure. The baseline must
+be a standalone complete closure outside the packet, including no in-packet
+hard-link alias. It is external trust evidence: retain its separate review/seal.
+The selected bundle must actually be encountered exactly once. Missing policy,
+unexpected bundle paths, wrong OIDs/types/prerequisites, extra packed objects and
+unsupported formats refuse. Bundle v2 SHA-1 commit closures only are supported;
+v3/SHA-256/annotated tags are unsupported. No ancestor relationship is assumed.
 
-Only regular files and directories are accepted, both in the input inventory and
-in archives. Archive symlinks, hard links, devices, FIFOs and other special types
-are refused. Input symlinks are refused, including links to targets inside `DIR`.
-Paths must be canonical relative UTF-8 paths: no absolute names, empty/`.`/`..`
-components, backslashes, colons, NUL, or more than 128 components. A single final
-slash is allowed only for archive directory records. Newlines are permitted.
-Files get 0600 and directories 0700; executable, ownership, timestamp and special
-permission metadata from an archive is not installed. Original modes, sizes and
-mtimes are not changed (reading can update access times).
+The content scope is exactly reachable(Current) minus reachable(Base), including
+intermediate new commits, trees and blobs. Full paths at Current and each new
+commit are classified, including baseline-shared paths. Source suffix hints from
+all those trees preserve strict JSON/stream/archive handling for blob object
+names. Conflicting hints for one object refuse conservatively. Objects are
+visited in sorted OID order. Baseline-only content is excluded, never declared
+secret-free; its bytes and inflation still consume invocation budgets.
 
-Fixed limits (MiB means 1,048,576 bytes):
+Git uses fresh private bare repositories and its own object storage. Pack/delta
+sizes are bounded before import. No checkout, shell, inherited configuration,
+network protocol, hooks, replace refs, filters or submodules are used. Native
+Git verifies identities/connectivity. Tool output/stderr and subprocess counts
+consume shared bounds; tool errors are fixed diagnostics. Quarantines are
+removed after success/refusal. See the walker contract for exact accounting.
 
-| Resource | Limit |
-| --- | ---: |
-| Input inventory entries, including controls/directories | 4096 |
-| Top-level archives | 32 |
-| Archive member records, across all archives | 4096 |
-| Each input file/archive or extracted regular file | 16 MiB |
-| Scanned regular-file contents, across both buckets | 64 MiB |
-| Extracted regular-file bytes, across all archives | 64 MiB |
-| Inflated tar streams including metadata/padding, across tar archives | 64 MiB |
-| Trailing tar padding | 1 MiB, zero bytes only |
-| Text line, excluding LF | 1 MiB |
-| Logical/input path | 4096 bytes |
-| Each control file | 1 MiB |
-| Patterns / each pattern | 256 / 4096 bytes |
-| Estimated expanded regexp nodes, all patterns | 65,536 |
-| Known-base list entries | 4096 |
+## Finite limits
 
-ZIP claimed sizes are checked before decompression; actual bytes and CRC are
-checked while reading. Tar parsing, metadata and gzip inflation are bounded
-before parsing. Gzip CRC/truncation is checked through the end; nonzero trailing
-payload is refused. Absolute limits bound compressed bombs without depending on
-a compression ratio. Failures remove only the exclusively created output tree;
-if cleanup itself fails a fixed output error is reported and the operator must
-inspect that reserved tree. No partial counts are emitted.
+Every walker flag is positive with a finite hard ceiling; zero/negative/excessive
+values refuse. Budgets are cumulative across siblings, nesting, Git objects and
+baseline materialization. No container gets a fresh allowance.
 
-All data traversal and output operations beneath `DIR` use `os.Root`. Inventory
-rejects links/special files, and file identity, size, mode and mtime are checked
-around reads. Exclusive file creation prevents archive collisions. This tool
-expects an operator-owned, quiescent directory on a local filesystem. `os.Root`
-confines path resolution; this is **not** a proof against a malicious process
-with the same UID rewriting files, moving directories, changing mounts, or
-restoring metadata during a scan. It does not sandbox the operator's environment
-or defeat hard links already supplied as input. Run it offline with only the
-intended packet/control files accessible when handling sensitive material.
+| CLI flag | Default | Hard ceiling |
+| --- | ---: | ---: |
+| `--max-depth` | 8 | 32 |
+| `--max-files` | 4096 | 65536 |
+| `--max-entries` | 8192 | 131072 |
+| `--max-containers` | 64 | 1024 |
+| `--max-commands` | 256 | 65536 |
+| `--max-file-bytes` | 16 MiB | 16 MiB (classifier ceiling) |
+| `--max-compressed-bytes` | 64 MiB | 1 GiB |
+| `--max-expanded-bytes` | 128 MiB | 1 GiB |
+| `--max-stream-bytes` | 128 MiB | 1 GiB |
+| `--max-command-bytes` | 64 MiB | 1 GiB |
+| `--timeout` | 30s | 5m |
 
-## Verification and landing
+Existing independent CLI bounds remain: 4096 filesystem inventory entries,
+32 suffix-selected top-level archives, 16 MiB per input, 64 MiB total ordinary
+leaf bytes, 1 MiB per text line/control file, 4096-byte/128-component canonical
+paths, 256 patterns of at most 4096 bytes, 65,536 estimated regexp nodes and
+4096 known-base paths. Controls consume walker entry/materialization budgets
+but are excluded from ordinary ERE leaf counts. Git metadata/object stdout and
+reconstructed bytes consume the walker budgets described in its contract.
+Nested buffers can coexist; finite does not mean constant or small memory.
 
-All development fixtures are synthetic. Ordinary tests, race tests, vet and a
-build should run with a fresh private HOME/TMP/cache, read-only source/tools and
-no network. The task delivery includes the exact sandbox command and actual
-checks. No real pattern file, credentials or provider are needed or exercised.
+The walker timeout covers its parser/read boundaries, Git and cooperative
+callbacks. Preflight/control reads and final bounded filesystem publication
+also require an outer hard process timeout. The library cannot cancel a stuck
+filesystem syscall or an uncooperative caller. Use an OS memory/process limit
+where required by the operator environment.
+
+## Verification
+
+All fixtures are inert synthetic data. Run checks offline with read-only
+source/tools and fresh private HOME/TMP/cache, without host homes/keys/sockets:
 
 ```sh
 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -count=1 ./...
@@ -178,8 +247,10 @@ GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race -count=1 ./...
 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go vet ./...
 ```
 
-This initial implementation is a PR candidate. Product landing requires a fresh,
-independent Codex review bound to the exact head/tree, source-owner marker/check
-gates, and a signed landing by the authorized source owner. This subproject
-transfers the sealed candidate from the superseded private `meta-tools` PR;
-that repository's bootstrap main remains empty. No landing is claimed here.
+Composition controls cover nested archives with empty/populated/malformed JSON,
+known-base/patch/control/path blocking, full/delta Git closures and suffix hints,
+metadata/binary/unsupported-format refusals, deterministic cumulative caps,
+transactional extraction and sandbox isolation. Delivery evidence binds the
+exact candidate head/tree and preserves actual failures, times and exits.
+Independent whole-composition review and source-owner marker/checks remain
+required before publication; no landing or installed qualification is claimed.

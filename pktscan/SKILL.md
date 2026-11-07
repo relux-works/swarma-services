@@ -1,6 +1,6 @@
 ---
 name: pktscan
-description: Build or use the standalone pktscan packet scanner with counts-only output and bounded extraction.
+description: Build or use the standalone pktscan packet scanner with counts-only output and bounded recursive packet classification.
 ---
 
 # pktscan
@@ -21,6 +21,9 @@ flags. Use only the operator-designated packet and controls. Extraction creates
 executes extracted files. It is not a sandbox against hostile same-UID writers.
 
 Keep patterns, input paths and matches out of diagnostics and logs. Successful
-output contains only JSON counts in `new` and `known_base` buckets. Test with
+output contains JSON counts in ordinary, Git-object, metadata, blocking and
+traversal buckets. Read the README for bundle scope flags and finite limits.
+Secret blocking precedes pattern/diff filtering and known-base classification.
+Set an absolute private 0700 TMPDIR outside the packet and apply an outer timeout. Test with
 synthetic fixtures only; never seek actual owner marker patterns for testing.
 Independent exact-head review and source-owner gates remain required for landing.
