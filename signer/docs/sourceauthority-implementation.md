@@ -30,7 +30,7 @@ Required checks are matched by exact head and context/application identity again
 
 `no_required_and_none_present` requires a positively known no-required policy and a complete successful empty inventory; unknown rules, API denial, partial inventory and green CI cannot establish that case.
 
-Observations use zero positive future tolerance and a 1..300-second lease; the complete source read and local verification share one absolute 30-second budget, and remaining lifetime is capped by a same-process monotonic deadline without rounding fractional time upward.
+Observations use zero positive future tolerance and a 1..300-second lease; the complete source read and local verification share one absolute 30-second budget, and remaining lifetime is capped by a same-process monotonic deadline without rounding fractional time upward. Sampled clock readings carry their full measured `SampleSpan`: receipt deadlines retain the leading monotonic anchor, while final qualification, budget and freshness checks include the trailing endpoint and conservative upper wall bound. Sampling delay cannot extend the receipt deadline or hide expiry inside the measured bracket.
 
 `CheckFreshness` checks only the local lease and trusted clock epoch; it cannot establish another phase or replace a new presign observation, current revocation check or final release-policy check.
 
@@ -58,6 +58,8 @@ Only SSH Ed25519 owner signatures are implemented. Admission of actual full repo
 Installed `Profile` bounds commit bytes, ancestry path length, platform-review count and check count before processing. The contract does not fix capacities for these raw adapter-internal records. Fixture values (1 MiB/256/256/256) are resource bounds for local qualification, not a selected production policy; exhaustion returns unavailable. An actual source/adapter profile must be agreed and qualified before production. Source must enforce bounded acquisition before allocation, honor its context deadline and transfer stable ownership of returned observations. The in-process core does not sandbox or forcibly terminate a malicious configured Source.
 
 `Clock` must come from a qualified same-process clock/discontinuity detector, change epoch on restart/detected discontinuity, and return errors on unknown time. No host clock is declared qualified. Refresh failures, expired observations, changed/revoked/unknown policy and clock uncertainty refuse. There is no per-release owner-presence requirement, retry override or cache fallback.
+
+The [process clock source implementation](sourceauthority-clock.md) implements this seam with sampled wall/monotonic continuity and permanent refusal on uncertainty. Its source controls do not establish target clock admission or native qualification.
 
 There is no credential reader, provider transport, live request, private-key reader, source DATA acquisition, admission store, IPC parser, production adapter, builder, native signing, audit, fetch or service entrypoint in this package. Signing/audit composition belongs to separate units. Native account/Keychain/DR isolation, actual provider access/custody and whole-solution acceptance remain explicit gates.
 

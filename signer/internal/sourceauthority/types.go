@@ -72,7 +72,16 @@ type Reading struct {
 	Wall      time.Time
 	Monotonic time.Duration
 	Epoch     string
+	// SampleSpan bounds elapsed time from the leading Monotonic endpoint to
+	// completion of this reading. Wall was sampled inside that interval, so
+	// Wall+SampleSpan is a conservative upper wall bound at completion.
+	// Zero denotes a point reading; sampled adapters must report the full span.
+	SampleSpan time.Duration
 }
+
+// end is used only after validReading has checked the addition for overflow.
+func (r Reading) end() time.Duration { return r.Monotonic + r.SampleSpan }
+func (r Reading) wallEnd() time.Time { return r.Wall.Add(r.SampleSpan) }
 
 type Clock interface {
 	Read() (Reading, error)
@@ -260,7 +269,7 @@ func (q *Qualification) CheckFreshness() error {
 		return unavailable("absent_qualification")
 	}
 	now, err := q.clock.Read()
-	if err != nil || !validReading(now) || now.Epoch != q.start.Epoch || now.Monotonic < q.start.Monotonic || now.Monotonic >= q.deadline || now.Wall.Before(q.start.Wall) || now.Wall.Unix() < q.summary.ObservedAt || now.Wall.Unix() >= q.summary.ExpiresAt {
+	if err != nil || !validReading(now) || now.Epoch != q.start.Epoch || now.Monotonic < q.start.end() || now.end() >= q.deadline || now.Wall.Before(q.start.Wall) || now.Wall.Unix() < q.summary.ObservedAt || now.wallEnd().Unix() >= q.summary.ExpiresAt {
 		return unavailable("lease_clock")
 	}
 	return nil

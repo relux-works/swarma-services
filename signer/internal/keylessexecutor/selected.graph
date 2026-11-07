@@ -1,0 +1,16 @@
+github.com/relux-works/swarma-keyvault github.com/relux-works/swarma-envelope@v0.0.0-20261105191315-6c71e5226416
+github.com/relux-works/swarma-keyvault github.com/relux-works/swarma-registrar@v0.0.0-20261023164451-5f44ebf3f788
+github.com/relux-works/swarma-keyvault go@1.26.0
+github.com/relux-works/swarma-keyvault golang.org/x/crypto@v0.55.0
+github.com/relux-works/swarma-keyvault golang.org/x/sys@v0.47.0
+github.com/relux-works/swarma-keyvault toolchain@go1.26.10
+github.com/relux-works/swarma-envelope@v0.0.0-20261105191315-6c71e5226416 github.com/relux-works/swarma-registrar@v0.0.0-20261023164451-5f44ebf3f788
+github.com/relux-works/swarma-envelope@v0.0.0-20261105191315-6c71e5226416 go@1.26.0
+github.com/relux-works/swarma-registrar@v0.0.0-20261023164451-5f44ebf3f788 go@1.26.0
+go@1.26.0 toolchain@go1.26.0
+golang.org/x/crypto@v0.55.0 golang.org/x/net@v0.57.0
+golang.org/x/crypto@v0.55.0 golang.org/x/sys@v0.47.0
+golang.org/x/crypto@v0.55.0 golang.org/x/term@v0.45.0
+golang.org/x/crypto@v0.55.0 golang.org/x/text@v0.41.0
+golang.org/x/crypto@v0.55.0 go@1.25.0
+golang.org/x/sys@v0.47.0 go@1.25.0
