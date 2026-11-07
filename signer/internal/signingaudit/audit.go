@@ -400,7 +400,7 @@ func (a *Audit) append(kind string, op Operation) error {
 			old.State, old.Phase = Uncertain, "reconciling"
 			a.operations[old.ID] = old
 		}
-		return ErrAudit
+		return err
 	}
 	if err := a.apply(r); err != nil {
 		a.poisoned = true

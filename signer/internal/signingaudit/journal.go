@@ -112,7 +112,7 @@ func openJournal(path string, opts Options, apply func(record) error) (_ *journa
 	j := &journal{root: root, durable: opts.Durability, budget: opts.MaxBytes}
 	defer func() {
 		if err != nil {
-			_ = j.close()
+			err = errors.Join(err, j.close())
 		}
 	}()
 	j.dir, err = root.Open(".")
@@ -149,13 +149,13 @@ func openJournal(path string, opts Options, apply func(record) error) (_ *journa
 		}
 		b, _ := json.Marshal(header{1, opts.Durability.Name(), opts.MaxBytes})
 		if err = writeFrame(j.file, b); err != nil {
-			return nil, ErrAudit
+			return nil, errors.Join(ErrAudit, err)
 		}
 		if err = j.durable.File(j.file); err != nil {
-			return nil, ErrAudit
+			return nil, errors.Join(ErrAudit, err)
 		}
 		if err = j.durable.Directory(j.dir); err != nil {
-			return nil, ErrAudit
+			return nil, errors.Join(ErrAudit, err)
 		}
 	} else if err != nil {
 		return nil, ErrAudit
@@ -225,16 +225,16 @@ func openJournal(path string, opts Options, apply func(record) error) (_ *journa
 	// A complete record observed after restart may have survived a failed flush.
 	// Re-establish the selected boundary before permitting any effect or release.
 	if err = j.durable.File(j.file); err != nil {
-		return nil, ErrAudit
+		return nil, errors.Join(ErrAudit, err)
 	}
 	if err = j.durable.Directory(j.dir); err != nil {
-		return nil, ErrAudit
+		return nil, errors.Join(ErrAudit, err)
 	}
 	j.write = j.file.Write
 	return j, nil
 }
 
-func (j *journal) sealTail(create bool) error {
+func (j *journal) sealTail(create bool) (err error) {
 	if _, err := j.file.Seek(0, io.SeekStart); err != nil {
 		return ErrAudit
 	}
@@ -245,21 +245,25 @@ func (j *journal) sealTail(create bool) error {
 	}
 	want := seal{1, journalName, n, hex.EncodeToString(h.Sum(nil)), j.last}
 	if !create {
-		f, err := openPrivate(j.root, sealName, os.O_RDONLY)
-		if err != nil {
-			return err
+		f, openErr := openPrivate(j.root, sealName, os.O_RDONLY)
+		if openErr != nil {
+			return openErr
 		}
-		defer f.Close()
-		b, partial, err := readFrame(f)
+		defer func() {
+			if closeErr := f.Close(); closeErr != nil {
+				err = errors.Join(ErrAudit, err, closeErr)
+			}
+		}()
+		b, partial, readErr := readFrame(f)
 		var got seal
-		if err != nil || partial || !decodeExact(b, &got) || got != want {
+		if readErr != nil || partial || !decodeExact(b, &got) || got != want {
 			return ErrCorrupt
 		}
-		if _, _, err = readFrame(f); !errors.Is(err, io.EOF) {
+		if _, _, readErr = readFrame(f); !errors.Is(readErr, io.EOF) {
 			return ErrCorrupt
 		}
-		st, err := f.Stat()
-		if err != nil || j.size > j.budget-st.Size() {
+		st, statErr := f.Stat()
+		if statErr != nil || j.size > j.budget-st.Size() {
 			return ErrAudit
 		}
 		j.size += st.Size()
@@ -273,9 +277,19 @@ func (j *journal) sealTail(create bool) error {
 	if err != nil {
 		return ErrAudit
 	}
-	defer f.Close()
-	if writeFrame(f, b) != nil || j.durable.File(f) != nil || j.durable.Directory(j.dir) != nil {
-		return ErrAudit
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			err = errors.Join(ErrAudit, err, closeErr)
+		}
+	}()
+	if err = writeFrame(f, b); err != nil {
+		return errors.Join(ErrAudit, err)
+	}
+	if err = j.durable.File(f); err != nil {
+		return errors.Join(ErrAudit, err)
+	}
+	if err = j.durable.Directory(j.dir); err != nil {
+		return errors.Join(ErrAudit, err)
 	}
 	j.size += int64(len(b) + 4)
 	return nil
@@ -298,12 +312,15 @@ func (j *journal) append(kind string, op Operation) (record, error) {
 	binary.BigEndian.PutUint32(frame, uint32(len(b)))
 	copy(frame[4:], b)
 	n, err := j.write(frame)
-	if err != nil || n != len(frame) {
-		return record{}, ErrAudit
+	if err != nil {
+		return record{}, errors.Join(ErrAudit, err)
+	}
+	if n != len(frame) {
+		return record{}, errors.Join(ErrAudit, io.ErrShortWrite)
 	}
 	// PRE_RELEASE_OUTCOME: writer state advances ONLY after actual durable flush.
 	if err = j.durable.File(j.file); err != nil {
-		return record{}, ErrAudit
+		return record{}, errors.Join(ErrAudit, err)
 	}
 	j.size += int64(len(frame))
 	j.last = Anchor{r.Sequence, r.Digest}

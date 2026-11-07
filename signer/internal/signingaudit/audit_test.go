@@ -452,6 +452,7 @@ func TestIntentAndOutcomeFlushFailures(t *testing.T) {
 				f.p.fail(kind)
 				_, err := f.a.Accept(request(), inputs())
 				wantErr(t, err, ErrAudit)
+				wantErr(t, err, errFixture)
 				if f.effects.signs.Load() != 0 {
 					t.Fatal("accept failure signed")
 				}
@@ -461,6 +462,7 @@ func TestIntentAndOutcomeFlushFailures(t *testing.T) {
 			f.p.fail(kind)
 			_, err := f.a.Run(context.Background(), op.ID)
 			wantErr(t, err, ErrAudit)
+			wantErr(t, err, errFixture)
 			wantErr(t, f.a.Fetch(context.Background(), op.Request.Caller, op.ID), ErrAudit)
 			if f.effects.releases.Load() != 0 {
 				t.Fatal("OUTCOME_FAILURE_RELEASED")

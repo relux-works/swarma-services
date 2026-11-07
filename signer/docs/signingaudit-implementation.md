@@ -1,6 +1,6 @@
 # Signing audit component candidate
 
- It adds no executable, controller, service entrypoint, native bridge or production activation. The normative reading order is baseline-r5, builder-wire-data-r2, manifest-capacity-r3, integrated-addendum-r2 and the open agreement register. Later finite-protocol and operation-history rules control the earlier synchronous prose.
+The component adds no controller, service entrypoint or production activation. A separate source-only strict native durability profile and synthetic-effect check runner are described in [native-durability-check.md](native-durability-check.md); neither is a qualified host profile or native signer. The normative reading order is baseline-r5, builder-wire-data-r2, manifest-capacity-r3, integrated-addendum-r2 and the open agreement register. Later finite-protocol and operation-history rules control the earlier synchronous prose.
 
 `internal/signingaudit` enforces local acceptance/intent/outcome ordering and replay with explicitly injected `TrustMetadata`, `Signer`, `Reconciler`, `Releaser` and `Durability` interfaces. It imports only the standard library. These interfaces are custody boundaries, not implementations of source authority, native signing, artifact immutability or host isolation. Unit 305 owns source authority. No caller binary, path, command, credential or key is accepted by this API.
 
