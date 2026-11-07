@@ -50,7 +50,7 @@ func acquisitionFixture(t *testing.T, h http.HandlerFunc, limits acquisitionLimi
 	return a, &open
 }
 func smallAcquisitionLimits() acquisitionLimits {
-	return acquisitionLimits{header: 4096, metadata: 16, commit: 8, aggregate: 128, responses: 8}
+	return acquisitionLimits{header: acquisitionHeaderMax, metadata: 16, commit: 8, aggregate: 128, responses: 8}
 }
 func acquisitionTestPhase(t *testing.T, a *sourceAcquisition, bytes int64, responses int) *acquisitionPhase {
 	t.Helper()
@@ -102,7 +102,7 @@ func TestAcquisitionBodyBoundaries(t *testing.T) {
 						_, _ = io.WriteString(w, strings.Repeat("x", n))
 					}, smallAcquisitionLimits())
 					p := acquisitionTestPhase(t, a, 128, 8)
-					got, err := p.acquire(endpoint, 64, 4096)
+					got, err := p.acquire(endpoint, 64, acquisitionHeaderMax)
 					if n > limit {
 						refuseAcquisition(t, got, err)
 						want := int64(128)
@@ -151,7 +151,7 @@ func TestAcquisitionRemainingBudgets(t *testing.T) {
 				_, _ = io.WriteString(w, strings.Repeat("x", tc.length))
 			}, smallAcquisitionLimits())
 			p := acquisitionTestPhase(t, a, tc.aggregate, 8)
-			got, err := p.acquire("metadata", tc.body, 4096)
+			got, err := p.acquire("metadata", tc.body, acquisitionHeaderMax)
 			if tc.success {
 				if err != nil || len(got.body) != tc.length {
 					t.Fatalf("neighbor: %v", err)
@@ -167,10 +167,10 @@ func TestAcquisitionRemainingBudgets(t *testing.T) {
 	var calls atomic.Int32
 	a, _ := acquisitionFixture(t, func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); _, _ = io.WriteString(w, "a") }, smallAcquisitionLimits())
 	p := acquisitionTestPhase(t, a, 128, 1)
-	if _, err := p.acquire("metadata", 16, 4096); err != nil {
+	if _, err := p.acquire("metadata", 16, acquisitionHeaderMax); err != nil {
 		t.Fatal(err)
 	}
-	got, err := p.acquire("metadata", 16, 4096)
+	got, err := p.acquire("metadata", 16, acquisitionHeaderMax)
 	refuseAcquisition(t, got, err)
 	if calls.Load() != 1 || p.responsesLeft != 0 {
 		t.Fatal("response budget bypassed")
@@ -204,12 +204,12 @@ func TestAcquisitionRefusalsAndErrorBodies(t *testing.T) {
 				_, _ = io.WriteString(w, strings.Repeat("x", tc.n))
 			}, smallAcquisitionLimits())
 			p := acquisitionTestPhase(t, a, 128, 8)
-			got, err := p.acquire("metadata", 16, 4096)
+			got, err := p.acquire("metadata", 16, acquisitionHeaderMax)
 			refuseAcquisition(t, got, err)
 			if p.bytesLeft != 128-tc.used || neighbors.Load() != 0 {
 				t.Fatalf("error/redirect accounting: left=%d followed=%d", p.bytesLeft, neighbors.Load())
 			}
-			got, err = p.acquire("neighbor", 16, 4096)
+			got, err = p.acquire("neighbor", 16, acquisitionHeaderMax)
 			refuseAcquisition(t, got, err)
 			if p.responsesLeft != 7 {
 				t.Fatal("failed phase retried")
@@ -242,7 +242,7 @@ func TestAcquisitionMalformedHTTPAndHeaders(t *testing.T) {
 				_, _ = io.WriteString(c, wire)
 			}, smallAcquisitionLimits())
 			p := acquisitionTestPhase(t, a, 128, 8)
-			got, err := p.acquire("metadata", 16, 4096)
+			got, err := p.acquire("metadata", 16, acquisitionHeaderMax)
 			refuseAcquisition(t, got, err)
 		})
 	}
@@ -317,11 +317,11 @@ func TestAcquisitionInstallationOwnership(t *testing.T) {
 		t.Fatal("public TLS roots not defensively owned")
 	}
 	p := acquisitionTestPhase(t, a, 128, 8)
-	first, err := p.acquire("metadata", 16, 4096)
+	first, err := p.acquire("metadata", 16, acquisitionHeaderMax)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := p.acquire("metadata", 16, 4096)
+	second, err := p.acquire("metadata", 16, acquisitionHeaderMax)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestAcquisitionDoesNotInheritContextHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err = p.acquire("metadata", 16, 4096); err != nil {
+	if _, err = p.acquire("metadata", 16, acquisitionHeaderMax); err != nil {
 		t.Fatal(err)
 	}
 	if hooks.Load() != 0 {
@@ -384,7 +384,7 @@ func TestAcquisitionCancellationAndNoQueue(t *testing.T) {
 				e error
 			}
 			done := make(chan result, 1)
-			go func() { r, e := p.acquire("metadata", 16, 4096); done <- result{r, e} }()
+			go func() { r, e := p.acquire("metadata", 16, acquisitionHeaderMax); done <- result{r, e} }()
 			select {
 			case <-started:
 			case <-time.After(time.Second):
@@ -394,7 +394,7 @@ func TestAcquisitionCancellationAndNoQueue(t *testing.T) {
 				other.close()
 				t.Fatal("occupied adapter queued/admitted")
 			}
-			got, e := p.acquire("neighbor", 16, 4096)
+			got, e := p.acquire("neighbor", 16, acquisitionHeaderMax)
 			refuseAcquisition(t, got, e)
 			if closePhase {
 				p.close()
@@ -443,12 +443,13 @@ func TestAcquisitionAbsoluteDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err = p.acquire("metadata", 16, 4096); err != nil {
+	if _, err = p.acquire("metadata", 16, acquisitionHeaderMax); err != nil {
 		t.Fatal(err)
 	}
-	got, err := p.acquire("metadata", 16, 4096)
+	got, err := p.acquire("metadata", 16, acquisitionHeaderMax)
 	refuseAcquisition(t, got, err)
-	if ctx.Err() != context.DeadlineExceeded {
+	deadline, _ := ctx.Deadline()
+	if time.Now().Before(deadline) {
 		t.Fatal("operation did not preserve absolute deadline")
 	}
 	waitAcquisition(t, func() bool { return open.Load() == 0 })
@@ -485,12 +486,12 @@ func TestAcquisitionProtectedConfiguration(t *testing.T) {
 		t.Fatal("fresh overlong budget accepted")
 	}
 	p := acquisitionTestPhase(t, a, 128, 8)
-	got, err := p.acquire("https://other.invalid/", 16, 4096)
+	got, err := p.acquire("https://other.invalid/", 16, acquisitionHeaderMax)
 	refuseAcquisition(t, got, err)
 	if calls.Load() != 0 {
 		t.Fatal("unknown endpoint reached network")
 	}
-	if _, err = p.acquire("metadata", 16, 4096); err != nil {
+	if _, err = p.acquire("metadata", 16, acquisitionHeaderMax); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -546,7 +547,7 @@ func TestAcquisitionRepeatedCleanup(t *testing.T) {
 	// Warm the runtime/TLS before taking process-local leak measurements.
 	for i := 0; i < 2; i++ {
 		p := acquisitionTestPhase(t, a, 128, 8)
-		if _, err := p.acquire("metadata", 16, 4096); err != nil {
+		if _, err := p.acquire("metadata", 16, acquisitionHeaderMax); err != nil {
 			t.Fatal(err)
 		}
 		p.close()
@@ -559,7 +560,7 @@ func TestAcquisitionRepeatedCleanup(t *testing.T) {
 	gBefore := runtime.NumGoroutine()
 	for i := 0; i < 24; i++ {
 		p := acquisitionTestPhase(t, a, 128, 8)
-		if _, err := p.acquire("metadata", 16, 4096); err != nil {
+		if _, err := p.acquire("metadata", 16, acquisitionHeaderMax); err != nil {
 			t.Fatal(err)
 		}
 		p.close()

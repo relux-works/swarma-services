@@ -1,14 +1,15 @@
 package sourceauthority
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptrace"
-	"net/textproto"
+	"net/http/httputil"
 	"net/url"
 	"path"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 
 const (
 	acquisitionHeaderMax    = 64 << 10
+	acquisitionParserFixed  = 32 << 10
 	acquisitionBodyMax      = 16 << 20
 	acquisitionCommitMax    = 1 << 20
 	acquisitionAggregateMax = 512 << 20
@@ -144,6 +146,7 @@ type acquisitionPhase struct {
 	cancel                           context.CancelFunc
 	mu                               sync.Mutex
 	active, closed, failed, released bool
+	uncertain                        bool
 	bytesLeft                        int64
 	responsesLeft                    int
 }
@@ -153,6 +156,13 @@ type acquisitionPhase struct {
 type acquisitionContext struct{ context.Context }
 
 func (acquisitionContext) Value(any) any { return nil }
+
+// Socket deadlines and context timer callbacks can become observable in either
+// order. Admission and material return use the actual absolute deadline too.
+func acquisitionExpired(ctx context.Context) bool {
+	d, ok := ctx.Deadline()
+	return !ok || ctx.Err() != nil || !time.Now().Before(d)
+}
 
 func (a *sourceAcquisition) begin(ctx context.Context, bytesLeft int64, responsesLeft int) (*acquisitionPhase, error) {
 	if a == nil || ctx == nil {
@@ -179,7 +189,7 @@ func (p *acquisitionPhase) close() {
 	p.releaseLocked()
 }
 func (p *acquisitionPhase) releaseLocked() {
-	if p.closed && !p.active && !p.released {
+	if p.closed && !p.active && !p.released && !p.uncertain {
 		p.released = true
 		p.source.busy.Store(false)
 	}
@@ -201,7 +211,7 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 	}
 	p.mu.Lock()
 	e, ok := p.source.endpoints[endpoint]
-	if !ok || p.active || p.closed || p.failed || p.ctx.Err() != nil || bodyLeft <= 0 || headerLeft <= 0 || p.bytesLeft <= 0 || p.responsesLeft <= 0 {
+	if !ok || p.active || p.closed || p.failed || p.uncertain || acquisitionExpired(p.ctx) || bodyLeft <= 0 || headerLeft <= 0 || p.bytesLeft <= 0 || p.responsesLeft <= 0 {
 		p.mu.Unlock()
 		return out, unavailable("acquisition_unavailable")
 	}
@@ -217,7 +227,7 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 	defer func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		if p.ctx.Err() != nil || p.closed {
+		if acquisitionExpired(p.ctx) || p.closed {
 			err = unavailable("acquisition_canceled")
 		}
 		if err != nil {
@@ -227,48 +237,103 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 		p.active = false
 		p.releaseLocked()
 	}()
-	if headerLimit < 64 {
+	if headerLimit <= acquisitionParserFixed {
 		return out, unavailable("acquisition_headers")
 	}
 
-	// A new non-pooling HTTP/1 transport prevents connection reuse/retry and
-	// persistent idle workers. Proxy discovery and compression are disabled.
-	// Reserve half the header budget for trailers. net/http bounds HTTP/1
-	// trailers by its read buffer; keep that buffer within this reservation.
-	t := &http.Transport{
-		Proxy: nil, DialContext: (&net.Dialer{}).DialContext,
-		DisableKeepAlives: true, DisableCompression: true,
-		MaxResponseHeaderBytes: headerLimit / 2, ReadBufferSize: int(min(headerLimit/2, 4096)),
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.source.roots, NextProtos: []string{"http/1.1"}},
-		TLSNextProto:    map[string]func(string, *tls.Conn) http.RoundTripper{},
-	}
-	defer t.CloseIdleConnections()
-	req, makeErr := http.NewRequestWithContext(p.ctx, http.MethodGet, e.url, nil)
+	// Own the single socket and all cancellation work. No Transport dial,
+	// persistConn, pooling, retry, proxy or TLS worker can outlive this call.
+	req, makeErr := http.NewRequest(http.MethodGet, e.url, nil)
 	if makeErr != nil {
 		return out, unavailable("acquisition_request")
 	}
+	req.Close = true
 	req.Header.Set("Accept-Encoding", "identity")
-	// GET needs no informational handshake. Refuse it rather than permitting
-	// an uncounted stream of preliminary responses or renewed header budgets.
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
-		Got1xxResponse: func(_ int, _ textproto.MIMEHeader) error { return unavailable("acquisition_informational") },
-	}))
-	// RoundTrip performs exactly one exchange and never follows redirects.
-	resp, roundErr := t.RoundTrip(req)
-	if resp != nil && resp.Body != nil {
-		defer func() {
-			if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
-				err = unavailable("acquisition_close")
-			}
-		}()
+	host := req.URL.Hostname()
+	port := req.URL.Port()
+	if port == "" {
+		port = "443"
 	}
-	if roundErr != nil || resp == nil || resp.Body == nil {
+	address := host
+	if net.ParseIP(host) == nil {
+		// Public resolver APIs do not expose a join for their internal workers.
+		// Retain this adapter gate permanently on this path, even on success,
+		// rather than assert a worker lifetime we cannot prove. This transfer
+		// may finish; no further transfer or phase is admitted on this adapter.
+		p.mu.Lock()
+		p.uncertain = true
+		p.mu.Unlock()
+		resolver := &net.Resolver{PreferGo: true, StrictErrors: true}
+		addresses, lookupErr := resolver.LookupHost(p.ctx, host)
+		if lookupErr != nil || acquisitionExpired(p.ctx) || len(addresses) == 0 {
+			return out, unavailable("acquisition_resolution_lifetime")
+		}
+		address = addresses[0]
+	}
+	// A numeric destination avoids resolver singleflight and parallel racers.
+	raw, dialErr := (&net.Dialer{FallbackDelay: -1}).DialContext(p.ctx, "tcp", net.JoinHostPort(address, port))
+	if dialErr != nil {
+		// DialContext may return before its internal cancellation callback
+		// exits. There is no public join. Retain the gate on every dial error.
+		if raw != nil {
+			_ = raw.Close()
+		}
+		p.mu.Lock()
+		p.uncertain = true
+		p.mu.Unlock()
+		return out, unavailable("acquisition_dial_lifetime")
+	}
+	deadline, _ := p.ctx.Deadline()
+	if setErr := raw.SetDeadline(deadline); setErr != nil {
+		_ = raw.Close()
 		return out, unavailable("acquisition_transport")
 	}
-	if p.ctx.Err() != nil {
+	cancelDone := make(chan struct{})
+	stop := context.AfterFunc(p.ctx, func() { _ = raw.Close(); close(cancelDone) })
+	defer func() {
+		// Close the underlying socket directly: no TLS close-notify timeout or
+		// response-body draining is allowed to extend the absolute phase.
+		_ = raw.Close()
+		if !stop() {
+			<-cancelDone
+		}
+	}()
+	conn := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.source.roots,
+		ServerName: host, NextProtos: []string{"http/1.1"}})
+	// Handshake runs in this goroutine. The joined callback above interrupts
+	// every blocked read/write, including handshake and request headers.
+	if handshakeErr := conn.Handshake(); handshakeErr != nil {
+		return out, unavailable("acquisition_transport")
+	}
+	if proto := conn.ConnectionState().NegotiatedProtocol; proto != "" && proto != "http/1.1" {
+		return out, unavailable("acquisition_protocol")
+	}
+	if writeErr := req.Write(conn); writeErr != nil {
+		return out, unavailable("acquisition_transport")
+	}
+	reader := bufio.NewReaderSize(conn, 64)
+	header, headerErr := acquisitionHeaders(reader, headerLimit)
+	if headerErr != nil {
+		return out, headerErr
+	}
+	// Only preflighted, reserved bytes reach the standard response parser.
+	// MultiReader preserves buffered body bytes without copying them.
+	parsed := bufio.NewReaderSize(io.MultiReader(bytes.NewReader(header), reader), 64)
+	resp, parseErr := http.ReadResponse(parsed, req)
+	if parseErr != nil || resp == nil || resp.Body == nil {
+		return out, unavailable("acquisition_protocol")
+	}
+	var bodyReader io.Reader = resp.Body
+	chunked := len(resp.TransferEncoding) != 0 && resp.Body != http.NoBody
+	if chunked {
+		// ReadResponse has validated transfer coding. Use the same standard
+		// chunk decoder, but never invoke net/http's allocating trailer parser.
+		bodyReader = httputil.NewChunkedReader(parsed)
+	}
+	if acquisitionExpired(p.ctx) {
 		return out, unavailable("acquisition_canceled")
 	}
-	if resp.StatusCode < 200 {
+	if resp.StatusCode < 200 || resp.ProtoMajor != 1 || resp.ProtoMinor > 1 {
 		return out, unavailable("acquisition_protocol")
 	}
 	enc := resp.Header.Values("Content-Encoding")
@@ -290,7 +355,7 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 	var scratch [32 << 10]byte
 	var total int64
 	for {
-		if p.ctx.Err() != nil {
+		if acquisitionExpired(p.ctx) {
 			return out, unavailable("acquisition_canceled")
 		}
 		want := min(int64(len(scratch)), limit-total)
@@ -306,11 +371,11 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 			return out, unavailable("acquisition_aggregate")
 		}
 		want = min(want, remaining)
-		n, readErr := resp.Body.Read(scratch[:want])
+		n, readErr := bodyReader.Read(scratch[:want])
 		p.mu.Lock()
 		p.bytesLeft -= int64(n)
 		p.mu.Unlock()
-		if p.ctx.Err() != nil {
+		if acquisitionExpired(p.ctx) {
 			return out, unavailable("acquisition_canceled")
 		}
 		total += int64(n)
@@ -328,6 +393,14 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 			body = append(body, scratch[:n]...)
 		}
 		if readErr == io.EOF {
+			if chunked {
+				// Trailer fields are forbidden. Inspect the empty terminator
+				// in place, before any field/map/string allocation.
+				line, trailerErr := parsed.ReadSlice('\n')
+				if trailerErr != nil || !bytes.Equal(line, []byte("\r\n")) {
+					return out, unavailable("acquisition_trailer")
+				}
+			}
 			break
 		}
 		if readErr != nil {
@@ -344,4 +417,56 @@ func (p *acquisitionPhase) acquire(endpoint string, bodyLeft, headerLeft int64) 
 		return out, unavailable("acquisition_status")
 	}
 	return acquiredResponse{body: body, status: resp.StatusCode}, nil
+}
+
+// acquisitionHeaders reserves the wire copy, scalar/copy scratch and parser
+// representation BEFORE allowing any byte into ReadResponse. The standard
+// parser still defines HTTP syntax (including folding and duplicate lengths).
+// Counting physical lines also bounds folded-line scratch, duplicate values,
+// map growth and malformed-line diagnostics. It is deliberately conservative:
+// 32 KiB fixed state (including cold parser/diagnostic machinery), the full
+// wire-buffer capacity, eight bytes of scalar/copy
+// space per wire byte and 384 bytes per physical field line. At most 128 such
+// lines enter the parser. These allowances cover the supported standard
+// parser's map buckets/growth, string/value descriptors, line and fold copies,
+// status/framing state and two 64-byte reader buffers. TLS and payload storage
+// have separate lifetimes/limits; no trailer MIME parser is ever entered.
+func acquisitionHeaders(r *bufio.Reader, reservation int64) ([]byte, error) {
+	const fixed = int64(acquisitionParserFixed)
+	if reservation <= fixed {
+		return nil, unavailable("acquisition_headers")
+	}
+	capacity := (reservation - fixed) / 16
+	wire := make([]byte, 0, int(capacity))
+	lines, fields, lineStart := 0, int64(0), 0
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return nil, unavailable("acquisition_headers")
+		}
+		// Reserve a field line on its FIRST byte, before any dynamic parser state.
+		if len(wire) == lineStart && lines > 0 && b != '\r' && b != '\n' {
+			fields++
+		}
+		if fields > 128 || int64(len(wire)+1) > capacity ||
+			fixed+capacity+8*int64(len(wire)+1)+384*fields > reservation {
+			return nil, unavailable("acquisition_headers")
+		}
+		wire = append(wire, b) // Capacity was charged once; append cannot grow it.
+		if b == '\n' {
+			line := wire[lineStart:]
+			// Trailer declarations can expand a second map from a single
+			// comma-separated scalar. Refuse before ReadResponse allocates it.
+			if lines > 0 {
+				if colon := bytes.IndexByte(line, ':'); colon >= 0 && bytes.EqualFold(line[:colon], []byte("Trailer")) {
+					return nil, unavailable("acquisition_trailer")
+				}
+			}
+			if lines > 0 && (len(line) == 1 || len(line) == 2 && line[0] == '\r') {
+				return wire, nil
+			}
+			lines++
+			lineStart = len(wire)
+		}
+	}
 }
