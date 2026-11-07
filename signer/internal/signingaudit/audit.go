@@ -362,13 +362,15 @@ func (a *Audit) Fetch(ctx context.Context, caller, id string) error {
 	a.running = true
 	a.mu.Unlock()
 	defer a.stopRunning()
-	if ctx.Err() != nil || a.trust.Check(ctx, Fetch, op) != nil {
+	if ctx.Err() != nil || a.trust.Check(ctx, Fetch, op) != nil || ctx.Err() != nil {
 		return ErrAuthority
 	}
 	if a.releaser.Verify(ctx, op) != nil {
 		return ErrArtifact
 	}
-	if ctx.Err() != nil || a.trust.Check(ctx, Fetch, op) != nil {
+	// A successful trust callback can return after the transfer was cancelled.
+	// Observe that cancellation before entering the release callback.
+	if ctx.Err() != nil || a.trust.Check(ctx, Fetch, op) != nil || ctx.Err() != nil {
 		return ErrAuthority
 	}
 	return a.releaser.Release(ctx, op)
