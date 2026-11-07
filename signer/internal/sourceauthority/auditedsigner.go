@@ -41,6 +41,8 @@ type auditBinding struct {
 	request     signingaudit.Request
 	inputs      signingaudit.Inputs
 	build, sign *Qualification
+	current     *Qualification
+	phase       signingaudit.Phase
 	snapshot    *artifactsnapshot.Snapshot // borrowed only during Sign; never owned
 }
 
@@ -231,6 +233,17 @@ func (s *AuditedSigner) binding(op signingaudit.Operation) (*auditBinding, error
 	return b, nil
 }
 
+// entry retains the successful current check for this exact operation and phase.
+// Call it after every blocking step, directly before entering the backend. The
+// current lease supplements both original caps; it never replaces either one.
+func (s *AuditedSigner) entry(ctx context.Context, phase signingaudit.Phase, op signingaudit.Operation) (*auditBinding, error) {
+	b, err := s.binding(op)
+	if err != nil || b.phase != phase || b.current.CheckFreshness() != nil || b.ctx.Err() != nil || ctx.Err() != nil {
+		return nil, signingaudit.ErrAuthority
+	}
+	return b, nil
+}
+
 type auditTrust struct{ s *AuditedSigner }
 
 func (t auditTrust) Check(ctx context.Context, phase signingaudit.Phase, op signingaudit.Operation) error {
@@ -239,6 +252,8 @@ func (t auditTrust) Check(ctx context.Context, phase signingaudit.Phase, op sign
 	if err != nil {
 		return err
 	}
+	// A failed new check must not leave an older successful check usable.
+	b.current, b.phase = nil, ""
 	if ctx.Err() != nil || peer(ctx, s.backend.Peer, s.policy.Effects.SignerPeer) != nil {
 		return signingaudit.ErrAuthority
 	}
@@ -271,7 +286,11 @@ func (t auditTrust) Check(ctx context.Context, phase signingaudit.Phase, op sign
 	if ctx.Err() != nil {
 		return signingaudit.ErrAuthority
 	}
-	return q.CheckFreshness()
+	if err = q.CheckFreshness(); err != nil {
+		return err
+	}
+	b.current, b.phase = q, phase
+	return nil
 }
 
 type auditSign struct{ s *AuditedSigner }
@@ -286,7 +305,7 @@ func (a auditSign) Sign(ctx context.Context, op signingaudit.Operation) (signing
 	}
 	// Audit has already durably persisted intent. Any failure from this point is
 	// possible signing, including panic and cancellation. Audit never retries it.
-	if _, err = a.s.binding(op); err != nil || ctx.Err() != nil {
+	if _, err = a.s.entry(ctx, signingaudit.Presign, op); err != nil {
 		return signingaudit.Signed{}, signingaudit.ErrAuthority
 	}
 	return a.s.backend.SignSnapshot(ctx, op, b.snapshot)
@@ -301,6 +320,9 @@ func (a auditRelease) Verify(ctx context.Context, op signingaudit.Operation) err
 	if err := peer(ctx, a.s.backend.Peer, a.s.policy.Effects.SignerPeer); err != nil {
 		return err
 	}
+	if _, err := a.s.entry(ctx, signingaudit.Fetch, op); err != nil {
+		return err
+	}
 	return a.s.backend.Verify(ctx, op)
 }
 func (a auditRelease) Release(ctx context.Context, op signingaudit.Operation) error {
@@ -310,7 +332,7 @@ func (a auditRelease) Release(ctx context.Context, op signingaudit.Operation) er
 	if err := peer(ctx, a.s.backend.Peer, a.s.policy.Effects.SignerPeer); err != nil {
 		return err
 	}
-	if _, err := a.s.binding(op); err != nil || ctx.Err() != nil {
+	if _, err := a.s.entry(ctx, signingaudit.Fetch, op); err != nil {
 		return signingaudit.ErrAuthority
 	}
 	if err := a.s.backend.Release(ctx, op); err != nil {
@@ -328,7 +350,7 @@ func (a auditReconcile) Reconcile(ctx context.Context, op signingaudit.Operation
 	if err := peer(ctx, a.s.backend.Peer, a.s.policy.Effects.SignerPeer); err != nil {
 		return signingaudit.Signed{}, err
 	}
-	if _, err := a.s.binding(op); err != nil || ctx.Err() != nil {
+	if _, err := a.s.entry(ctx, signingaudit.Recovery, op); err != nil {
 		return signingaudit.Signed{}, signingaudit.ErrAuthority
 	}
 	return a.s.backend.Reconcile(ctx, op)

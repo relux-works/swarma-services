@@ -103,7 +103,13 @@ does a new `BeforeSign` with a fresh service nonce, checks exact tree identity,
 then calls the configured current native trust checker. It rechecks both original
 qualifications and the fresh qualification after that callback. Original context
 cancellation and both original lease caps still apply after journal flush and
-immediately before native callback entry. Neither a fresh source observation nor
+immediately before native callback entry. The successful fresh qualification is
+retained on the exact operation binding with its audit phase. After durable
+intent and endpoint authentication, Sign rechecks that qualification alongside
+both original caps and the original context directly before backend entry.
+Verify, Reconcile and Release apply the same gate after endpoint authentication
+for their own phase. A failed refresh clears the previous successful check;
+expiry never renews a lease or retries signing. Neither a fresh source observation nor
 a replacement context renews the job constructed before Build.
 
 Any error, panic, invalid native metadata or cancellation after intent remains
