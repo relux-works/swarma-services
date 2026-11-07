@@ -1,5 +1,6 @@
 // Package sourceauthority qualifies an exact Git source at a build or signing
-// boundary. It has no provider client, credential access, build or signing effect.
+// boundary. It has private bounded response transport, but no configured provider
+// installation, credential access, build or signing effect.
 // Its configured Source and Clock are trusted adapter dependencies, never request
 // inputs. Fixture Sources establish no actual hosting-provider authority.
 package sourceauthority
