@@ -386,6 +386,123 @@ func TestPurgeRunningExpiredRefAndNonReuse(t *testing.T) {
 		t.Fatalf("fresh removed %d %v", n, e)
 	}
 }
+func TestPurgePreservesUnlockedRunningOrphan(t *testing.T) {
+	s, p := store(t)
+	c, e := s.create("test", []string{"/bin/sh"}, 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Persist ordinary running metadata and nonempty logs, then release only
+	// our descriptors and lock. This models persisted orphan state, not SIGKILL.
+	func() {
+		defer c.close()
+		for _, stream := range []struct {
+			file *os.File
+			data string
+		}{{c.out, "orphan stdout\n"}, {c.err, "orphan stderr\n"}} {
+			if _, e := stream.file.WriteString(stream.data); e != nil {
+				t.Fatal(e)
+			}
+			if e := stream.file.Sync(); e != nil {
+				t.Fatal(e)
+			}
+		}
+	}()
+	orphan := c.record
+	completed, _, _ := runScript(t, s, p, "printf 'completed stdout'; printf 'completed stderr' >&2")
+	if completed.CommandStatus != "exited" || completed.CaptureStatus != "complete" {
+		t.Fatalf("invalid completed control: %+v", completed)
+	}
+	if e := s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	reopened, e := OpenStore(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer reopened.Close()
+	// Lookup validates the generated refs, metadata, log paths and private
+	// files. Neither corrupt metadata nor a held lock may mask this case.
+	for _, record := range []Record{orphan, completed} {
+		got, e := reopened.Lookup(record.Ref)
+		if e != nil || got.Ref != record.Ref || got.CommandStatus != record.CommandStatus || got.CaptureStatus != record.CaptureStatus || !got.Expires.Equal(record.Expires) || got.Expires.IsZero() {
+			t.Fatalf("invalid persisted fixture: record=%+v error=%v", got, e)
+		}
+	}
+	if orphan.CommandStatus != "running" || orphan.CaptureStatus != "running" || !orphan.Finished.IsZero() {
+		t.Fatalf("orphan was finalized: %+v", orphan)
+	}
+	read := func(path string) []byte {
+		t.Helper()
+		b, e := os.ReadFile(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return b
+	}
+	orphanBase := strings.TrimSuffix(orphan.Stdout, ".out.log")
+	completedBase := strings.TrimSuffix(completed.Stdout, ".out.log")
+	before := map[string][]byte{}
+	for _, path := range []string{orphanBase + ".json", orphan.Stdout, orphan.Stderr} {
+		before[path] = read(path)
+	}
+	locks := map[string]os.FileInfo{}
+	for _, base := range []string{orphanBase, completedBase} {
+		path := base + ".lock"
+		f, e := os.Open(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+			f.Close()
+			t.Fatalf("fixture lock is not available: %v", e)
+		}
+		st, e := f.Stat()
+		ce := f.Close() // Release the probe lock before invoking Purge.
+		if e != nil || ce != nil {
+			t.Fatalf("lock probe: stat=%v close=%v", e, ce)
+		}
+		locks[path] = st
+	}
+	now := orphan.Expires.Add(time.Hour)
+	if !now.After(completed.Expires) {
+		now = completed.Expires.Add(time.Hour)
+	}
+	var tombstone []byte
+	for pass, want := range []int{1, 0} {
+		n, e := reopened.Purge(now.Add(time.Duration(pass) * time.Hour))
+		if e != nil || n != want {
+			t.Errorf("purge pass %d: count=%d want=%d error=%v", pass+1, n, want, e)
+		}
+		for path, b := range before {
+			if !bytes.Equal(read(path), b) {
+				t.Errorf("purge pass %d changed orphan %s", pass+1, filepath.Base(path))
+			}
+		}
+		for _, path := range []string{completed.Stdout, completed.Stderr} {
+			if _, e := os.Lstat(path); !errors.Is(e, os.ErrNotExist) {
+				t.Errorf("completed log retained: %v", e)
+			}
+		}
+		meta := read(completedBase + ".json")
+		var expired Record
+		if e := json.Unmarshal(meta, &expired); e != nil || expired.Ref != completed.Ref || expired.CommandStatus != "exited" || expired.CaptureStatus != "expired" {
+			t.Fatalf("invalid tombstone: record=%+v error=%v", expired, e)
+		}
+		if pass == 0 {
+			tombstone = meta
+		} else if !bytes.Equal(meta, tombstone) {
+			t.Error("subsequent purge rewrote completed tombstone")
+		}
+		for path, original := range locks {
+			st, e := os.Lstat(path)
+			if e != nil || !os.SameFile(original, st) || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 {
+				t.Errorf("purge changed stable lock %s: %v", filepath.Base(path), e)
+			}
+		}
+	}
+}
+
 func TestPurgeNeverFollowsOutputSymlink(t *testing.T) {
 	s, p := store(t)
 	r, _, _ := runScript(t, s, p, "printf fixture")
