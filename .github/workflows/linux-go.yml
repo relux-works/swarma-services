@@ -28,23 +28,90 @@ jobs:
         with:
           go-version: '1.26.8'
           cache: false
-      - name: Vet and race-test every Go module
+      - name: Prepare dependencies and run offline vet and race tests
         shell: bash
         run: |
           set -euo pipefail
-          git ls-files -z -- go.mod '**/go.mod' > "$RUNNER_TEMP/go-modules"
-          if [[ ! -s "$RUNNER_TEMP/go-modules" ]]; then
+          # Go's testing.TempDir creates children with 0777 before umask.
+          # Security fixtures require owned 0700 directories, including children.
+          umask 077
+          [[ "$RUNNER_TEMP" = /* ]]
+          state=$(mktemp -d "$RUNNER_TEMP/linux-go.XXXXXXXX")
+          trap 'chmod -R u+rwX "$state"; rm -rf -- "$state"' EXIT
+          mkdir -p "$state"/{home,tmp,cache,modcache,etc,source}
+          chmod 00700 "$state" "$state"/{home,tmp,cache,modcache,etc,source}
+          git ls-files -z -- go.mod '**/go.mod' > "$state/go-modules"
+          if [[ ! -s "$state/go-modules" ]]; then
             echo 'No tracked Go modules found' >&2
             exit 1
           fi
-          status=0
+          # A tracked source snapshot contains no checkout credentials or .git.
+          git archive HEAD | tar -x -C "$state/source"
+          goroot=$(go env GOROOT)
+          test "$(go version)" = 'go version go1.26.8 linux/amd64'
+          # Unprivileged extraction only: no package installation or host changes.
+          curl --fail --silent --show-error --location --max-time 60 \
+            https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb \
+            -o "$state/bubblewrap.deb"
+          echo "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094  $state/bubblewrap.deb" | sha256sum --check --strict
+          dpkg-deb --extract "$state/bubblewrap.deb" "$state/bubblewrap"
+          test "$("$state/bubblewrap/usr/bin/bwrap" --version)" = 'bubblewrap 0.9.0'
+          # Only dependency acquisition has network access. Go verifies canonical
+          # module archive/go.mod h1 values against the committed go.sum files.
           while IFS= read -r -d '' mod; do
-            module_dir=$(dirname "$mod")
-            echo "::group::$module_dir: go vet ./..."
-            (cd "$module_dir" && go vet ./...) || status=1
+            (cd "$state/source/$(dirname "$mod")" &&
+              env -i PATH="$goroot/bin:/usr/bin:/bin" HOME="$state/home" \
+                TMPDIR="$state/tmp" XDG_CACHE_HOME="$state/cache" \
+                GOCACHE="$state/cache/go-build" GOMODCACHE="$state/modcache" \
+                GOTOOLCHAIN=local GOENV=off GOFLAGS=-mod=readonly GOAUTH=off \
+                GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+                timeout --signal=TERM --kill-after=10s 120s go mod download)
+          done < "$state/go-modules"
+          printf 'offline:x:%s:%s:offline:/work/home:/bin/sh\n' "$(id -u)" "$(id -g)" > "$state/etc/passwd"
+          printf 'offline:x:%s:\n' "$(id -g)" > "$state/etc/group"
+          # Fail closed if namespaces are unavailable. No host home, identity
+          # database, keys, agent socket, foreign cache or network is mounted.
+          timeout --signal=TERM --kill-after=10s 900s \
+            "$state/bubblewrap/usr/bin/bwrap" --die-with-parent --new-session \
+            --unshare-all --clearenv --cap-drop ALL \
+            --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/sbin /sbin \
+            --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+            --ro-bind "$goroot" /toolchain --ro-bind "$state/source" /source \
+            --bind "$state/home" /work/home --bind "$state/tmp" /work/tmp \
+            --bind "$state/cache" /work/cache --ro-bind "$state/modcache" /work/modcache \
+            --ro-bind "$state/go-modules" /work/go-modules \
+            --ro-bind "$state/etc/passwd" /etc/passwd --ro-bind "$state/etc/group" /etc/group \
+            --proc /proc --dev /dev --chdir /source \
+            --setenv PATH /toolchain/bin:/usr/bin:/bin --setenv GOROOT /toolchain \
+            --setenv HOME /work/home --setenv TMPDIR /work/tmp \
+            --setenv XDG_CACHE_HOME /work/cache --setenv GOCACHE /work/cache/go-build \
+            --setenv GOMODCACHE /work/modcache --setenv GOPATH /work/gopath \
+            --setenv GOTOOLCHAIN local --setenv GOENV off --setenv GOFLAGS -mod=readonly \
+            --setenv GOPROXY off --setenv GOSUMDB off --setenv GOAUTH off \
+            --setenv CGO_ENABLED 1 --setenv GOMAXPROCS 2 \
+            --setenv GIT_CONFIG_NOSYSTEM 1 --setenv GIT_CONFIG_GLOBAL /dev/null \
+            --setenv GIT_CONFIG_SYSTEM /dev/null --setenv GIT_TERMINAL_PROMPT 0 \
+            /bin/bash -s <<'OFFLINE'
+          set -euo pipefail
+          umask 077
+          status=0
+          run_check() {
+            local bound=$1 rc=0
+            shift
+            printf 'start=%s bound=%ss command=' "$(date -u +%FT%TZ)" "$bound"
+            printf '%q ' "$@"
+            printf '\n'
+            timeout --signal=TERM --kill-after=10s "${bound}s" "$@" || rc=$?
+            printf 'end=%s exit=%s\n' "$(date -u +%FT%TZ)" "$rc"
+            if (( rc != 0 )); then status=1; fi
+          }
+          while IFS= read -r -d '' mod; do
+            cd "/source/$(dirname "$mod")"
+            echo "::group::$(dirname "$mod"): offline module verification, vet and race"
+            run_check 60 go mod verify
+            run_check 240 go vet ./...
+            run_check 360 go test -race ./...
             echo '::endgroup::'
-            echo "::group::$module_dir: go test -race ./..."
-            (cd "$module_dir" && go test -race ./...) || status=1
-            echo '::endgroup::'
-          done < "$RUNNER_TEMP/go-modules"
+          done < /work/go-modules
           exit "$status"
+          OFFLINE
