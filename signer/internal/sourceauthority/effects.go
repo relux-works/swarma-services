@@ -25,7 +25,8 @@ type EffectPolicy struct {
 // BuilderEffect and SignerEffect are trusted, constructor-bound adapters. Peer
 // must authenticate the fixed endpoint used by the subsequent effect, not echo
 // a requested principal. Implementations must keep that channel/identity fixed
-// across Peer and the effect and obey ctx. No production adapters exist here.
+// across Peer and the effect and obey ctx. No native endpoint implementation
+// exists here; OpenAuditedSigner composes the signingaudit ordering boundary.
 // Build must independently verify DATA/closure, native isolation, the complete
 // acknowledged job/result exchange and both output streams. A snapshot alone
 // is not evidence that those requirements were met.
@@ -65,9 +66,11 @@ type EffectRecord struct {
 // It is not a caller-supplied job parser or a new wire format. The immutable
 // opcode34 handle retains the actual raw bytes, not a reserialization.
 type BuildJob struct {
-	raw      []byte
-	manifest *manifestbody.UnqualifiedOpcode34Body
-	record   EffectRecord
+	raw           []byte
+	manifest      *manifestbody.UnqualifiedOpcode34Body
+	record        EffectRecord
+	qualification *Qualification
+	ctx           context.Context
 }
 
 func (j *BuildJob) RawBodyCopy() []byte                             { return append([]byte(nil), j.raw...) }
@@ -77,9 +80,10 @@ func (j *BuildJob) Record() EffectRecord                            { return j.r
 // SignJob retains the original build job correlation and the owned unsigned
 // snapshot while carrying a separately refreshed presign authority/nonce.
 type SignJob struct {
-	build    *BuildJob
-	snapshot *artifactsnapshot.Snapshot
-	record   EffectRecord
+	build         *BuildJob
+	snapshot      *artifactsnapshot.Snapshot
+	record        EffectRecord
+	qualification *Qualification
 }
 
 func (j *SignJob) Build() *BuildJob                     { return j.build }
@@ -213,7 +217,7 @@ func (r *EffectRunner) Run(ctx context.Context, body *manifestbody.UnqualifiedOp
 	}
 	h := sha256.Sum256(raw)
 	record := EffectRecord{Authority: summary, JobSHA256: hex.EncodeToString(h[:]), InputSHA256: input, RecipeSHA256: m.RecipeSHA256, ToolchainSHA256: m.ToolchainSHA256, Target: r.policy.Target, Peer: r.policy.BuilderPeer}
-	job := &BuildJob{raw: raw, manifest: body, record: record}
+	job := &BuildJob{raw: raw, manifest: body, record: record, qualification: qualification, ctx: ctx}
 	if err = r.audit.Record(ctx, record); err != nil {
 		return unavailable("boundary_audit")
 	}
@@ -271,7 +275,7 @@ func (r *EffectRunner) Run(ctx context.Context, body *manifestbody.UnqualifiedOp
 	if err = qualification.CheckFreshness(); err != nil {
 		return err
 	}
-	if err = r.signer.Sign(ctx, &SignJob{build: job, snapshot: snapshot, record: record}); err != nil {
+	if err = r.signer.Sign(ctx, &SignJob{build: job, snapshot: snapshot, record: record, qualification: qualification}); err != nil {
 		return unavailable("sign_effect")
 	}
 	if ctx.Err() != nil {

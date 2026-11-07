@@ -79,12 +79,56 @@ membership, owner authority or deployment is selected by the synthetic tests.
 The existing `signingaudit.Audit.Run` already orders a fresh
 `TrustMetadata.Check(Presign, operation)`, durable intent, its `Signer.Sign`
 callback and durable outcome. Its operation/input/replay model is unchanged.
-An actual signer adapter must compose that boundary with the retained operation,
-job, manifest, unsigned snapshot and current protected admission; the new neutral
-audit callback is not an alternative journal. There is no such runtime adapter
-installed here. `keylessexecutor` likewise has only a private synthetic controller
+`OpenAuditedSigner` now provides that concrete source adapter. It implements
+`SignerEffect`, owns one existing `signingaudit.Audit`, and binds a fixed
+`SnapshotSigner`, protected `AuditSignerPolicy`, current native `TrustMetadata`,
+`Source` and `Clock` at construction. It is not installed by any runtime here.
+The neutral boundary audit remains correlation only; no journal schema, wire
+member, opcode or client action changes. `keylessexecutor` still has only a private synthetic controller
 and an unconditional public native refusal; this change supplies no process
 backend or new controller qualification switch.
+
+Before acceptance, the adapter hashes the retained opcode17 BODY and actual raw
+opcode34 BODY, checks their operation/commit/tree/configuration/nonce/lease
+bindings against both qualifications, and rehashes the entire unsigned snapshot
+through its read-only descriptor. Audit inputs bind those computed hashes, the
+snapshot's exact size/hash, the presign summary digest and configured certificate
+and requirement digests. The native callback receives that same snapshot and
+the journal operation, not a caller hash or path. The snapshot is borrowed only
+for the synchronous Sign call; the runner remains its owner and closes it on
+return or panic.
+
+`Audit.Run` calls the adapter's trust bridge before durable intent. That bridge
+does a new `BeforeSign` with a fresh service nonce, checks exact tree identity,
+then calls the configured current native trust checker. It rechecks both original
+qualifications and the fresh qualification after that callback. Original context
+cancellation and both original lease caps still apply after journal flush and
+immediately before native callback entry. Neither a fresh source observation nor
+a replacement context renews the job constructed before Build.
+
+Any error, panic, invalid native metadata or cancellation after intent remains
+possible signing. Repeated `Sign` never resumes an existing journal request.
+`Reconcile(requestID)` delegates only to the existing Audit recovery path and
+the endpoint's non-signing reconciliation method. It refreshes current source
+and native trust and must establish completed cleanup and verify existing private
+staging; missing staging does not establish that signing never happened. `Fetch`
+uses Audit's durable-success gate, independent endpoint verification and two
+fresh trust checks, including the check after verification. Only the release
+method may emit the already verified stored bytes. A transfer error can mean
+partial delivery and leaves historical success unchanged. Neither path signs.
+All methods serialize without waiting; Close refuses while a callback is active.
+
+There is a deliberate restart limit. The existing journal retains the authority
+digest, not original contexts, sampled-clock epochs, lease caps or raw bodies.
+The adapter retains only scalar bindings, the original context and both opaque
+qualifications in memory. After Close/reopen, Inspect remains available but
+recovery/fetch for old operations refuse for lack of that binding. Sign also
+refuses a previously accepted request, including a pre-intent pending operation.
+No deadline or missing custody proof is fabricated from the digest. Restart
+continuation needs an explicit contract for independently retained operation
+custody and clock/lease reconstruction; this adapter does not add a second log,
+extend a lease or silently adopt that contract. Native staging remains under
+the endpoint's existing custody and is not deleted by adapter Close.
 
 The focused controls in `effects_test.go` use synthetic signed Git observations,
 the existing BODY decoder, two in-process artifact streams and in-memory effect
@@ -94,3 +138,13 @@ for presign revocation/withdrawal/check changes, clock/provider uncertainty,
 foreign endpoints, changed inputs, audit failure, expiry, cancellation, entropy
 failure and the original context bound. These are source controls, not native
 execution or whole-service acceptance.
+
+`auditedsigner_test.go` additionally composes the actual journal with inert
+snapshot/signing/staging controls and a fixture durability profile performing
+real local file/directory fsync. It checks exact-intent durability before callback
+entry and outcome durability before any fixture release, acceptance/intent/outcome
+flush faults, staged partial signing, never-signing reconciliation, revocation,
+stale head, policy change, wrong certificate pin, expiry/epoch discontinuity,
+late cancellation, replaced contexts, restart refusal, panic cleanup and active
+writer custody. Local fsync and inert signed bytes qualify no native host,
+production durability profile, real key, delivery or release receipt.

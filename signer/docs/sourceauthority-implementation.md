@@ -6,7 +6,7 @@ The governing contract is [baseline r5](baseline-r5.md), [builder/DATA r2](build
 
 `internal/sourceauthority.New` accepts protected policy and two explicitly trusted dependencies: `Source` and `Clock`. A release caller supplies only a configured product/alias, exact lowercase 40-hex SHA-1 commit and service correlation bindings. It cannot supply observations, keys, URLs, review scopes, check policy or verification booleans. The constructor copies mutable policy slices and public key bytes. A zero `Qualification` is absent. Results contain immutable scalar summaries; raw event bodies and Matrix room/event/sender provenance remain outside product summaries.
 
-`BeforeBuild` and `BeforeSign` each perform a new complete source observation and check every request/response field, including phase, operation, nonce and policy. Build success is never cached as presign authority. The [effect-boundary source composition](sourceauthority-effects.md) generates service nonces, checks constructor-bound endpoint identities, retains exact job/manifest correlation and records neutral projections before invoking trusted effect adapters. Actual authenticated transports, native effects/admission and durable intent/outcome remain absent production dependencies; the composition does not qualify them.
+`BeforeBuild` and `BeforeSign` each perform a new complete source observation and check every request/response field, including phase, operation, nonce and policy. Build success is never cached as presign authority. The [effect-boundary source composition](sourceauthority-effects.md) generates service nonces, checks constructor-bound endpoint identities, retains exact job/manifest correlation and records neutral projections before invoking trusted effect adapters. Actual authenticated transports, native effects/admission and qualified durability remain absent production dependencies; the composition does not qualify them.
 
 ## Verified predicates
 
@@ -61,7 +61,7 @@ Installed `Profile` bounds commit bytes, ancestry path length, platform-review c
 
 The [process clock source implementation](sourceauthority-clock.md) implements this seam with sampled wall/monotonic continuity and permanent refusal on uncertainty. Its source controls do not establish target clock admission or native qualification.
 
-There is no credential reader, provider transport, live request, private-key reader, source DATA acquisition, admission store, IPC parser, production adapter, builder, native signing, audit, fetch or service entrypoint in this package. Signing/audit composition belongs to separate units. Native account/Keychain/DR isolation, actual provider access/custody and whole-solution acceptance remain explicit gates.
+There is no credential reader, provider transport, live request, private-key reader, source DATA acquisition, admission store, IPC parser, native builder/signer or service entrypoint in this package. `OpenAuditedSigner` composes the existing signing audit with the effect boundary; its [binding, recovery and restart limits](sourceauthority-effects.md) require separately admitted endpoint/native trust implementations. Native account/Keychain/DR isolation, actual provider access/custody and whole-solution acceptance remain explicit gates.
 
 ## Executable control groups
 
