@@ -99,6 +99,8 @@ The version 1 design comprises the [baseline](docs/baseline-r5.md),
 [integrated addendum](docs/integrated-addendum-r2.md), read in that order. The integrated addendum controls
 its explicit changes to earlier text, including module receipts and the proposed manifest capacity.
 The baseline defines the independent source, evidence adapter, builder, signer and client boundaries.
+The proposed [shared builder duties and Curator second-client recipe/custody delta](docs/builder-recipe-custody-delta.md)
+separates shared graph/cache and two-build handoff duties from Curator-specific missing recipe inputs; native gates remain open.
 The [open qualification register](../UNRESOLVED_QUESTIONS.md) records the remaining source and host inputs.
 
 The current admitted manifest limit remains 1 MiB. The proposed 4 MiB limit requires its specified parser,
