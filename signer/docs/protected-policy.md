@@ -56,7 +56,7 @@ the payload and request, independent of reviewer-signature syntax.
 
 `NewProtectedPolicySourceForRoute` fixes the explicit route with path and UID.
 `NewProtectedPolicySource` selects the existing Matrix loader and cannot infer
-GitHub from empty identities. The protected Authority/effect constructors select the snapshot's explicit
+GitHub from empty identities. The protected Authority/effect/audited constructors select the snapshot's explicit
 route. A GitHub snapshot requires the protected source with the GraphQL reader;
 generic sources and empty Matrix identities cannot enable or infer a route.
 ReviewerKeys, repository scope and original-record signatures remain mandatory.
@@ -131,6 +131,7 @@ GitHub configuration now requires the exact canonical keyvault repository,
 ReviewerKeys. Existing Matrix policies preserve their omitted optional reviewer
 field. Both constructors and the codec check repository-bound public pins and
 producer/reviewer separation. ReviewerKeys is defensively deep copied.
-A complete encoded GitHub configuration remains non-installable pending external
-digest admission. GraphQL original-review checks implement the narrowed first-run
+A complete encoded GitHub configuration requires a launch-supplied externally
+accepted exact digest; source changes do not reopen an existing byte acceptance.
+GraphQL original-review checks implement the narrowed first-run
 rule without changing policy bytes or adding a digest field to the payload.

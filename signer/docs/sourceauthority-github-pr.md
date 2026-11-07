@@ -28,9 +28,22 @@ original job cancellation remains binding. Existing transport and audit bounds
 remain unchanged. Final freshness is checked at the existing effect and audited
 backend entry gates. Original R cannot change across phases.
 
+After the final blocking GraphQL read, protected qualifications reread the
+entire canonical installed policy against the same externally bound digest.
+That read retains the original absolute deadline and remaining lease; clocks,
+cancellation and elapsed time are checked again afterward. Replaced, missing
+or malformed policy refuses before build, sign, verify, release or recovery.
+Audited entry also rechecks both older original lease caps after these reads.
+
+`OpenAuditedSignerWithPolicySource` constructs the audited route from the
+protected policy snapshot and launch-supplied expected digest. It shares the
+existing journal/native-trust composition with the Matrix-only
+`OpenAuditedSigner`; empty Matrix fields still refuse through the latter.
+The new constructor does not supply the missing production acquisition ports.
+
 Tests use synthetic TLS REST and in-memory signed GraphQL controls only. No
 live qualified provider, GitHub mutation, reviewer key custody, policy install,
 native run or first run is claimed. A real provider installation still needs
-qualified acquisition and its existing external policy admission. The native
+qualified acquisition and its externally accepted exact policy digest. The native
 policy payload is unchanged. Fresh independent whole-composition review and
 an admission marker remain required.

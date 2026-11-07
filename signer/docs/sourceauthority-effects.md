@@ -83,6 +83,11 @@ callback and durable outcome. Its operation/input/replay model is unchanged.
 `SignerEffect`, owns one existing `signingaudit.Audit`, and binds a fixed
 `SnapshotSigner`, protected `AuditSignerPolicy`, current native `TrustMetadata`,
 `Source` and `Clock` at construction. It is not installed by any runtime here.
+`OpenAuditedSigner` retains the explicit Matrix route. The protected
+`OpenAuditedSignerWithPolicySource` additionally binds the installed canonical
+snapshot and an externally accepted digest, using the snapshot's trusted route.
+For GitHub it still requires the exact protected source, native reviewer pins
+and original signed review ID. Both routes share all journal and native gates.
 The neutral boundary audit remains correlation only; no journal schema, wire
 member, opcode or client action changes. `keylessexecutor` still has only a private synthetic controller
 and an unconditional public native refusal; this change supplies no process

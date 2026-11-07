@@ -375,8 +375,15 @@ func (q *Qualification) checkFinalEffectContext(ctx context.Context) error {
 		if err := q.githubSource.readOriginal(boundedContext, *q.githubProof); err != nil {
 			return err
 		}
+		// The provider read can block across an installed-policy replacement.
+		// Reacquire the full canonical snapshot against the launch-bound digest
+		// under the SAME absolute deadline and remaining lease, then check all
+		// elapsed time and cancellation again before the caller enters an effect.
+		if err := checkInstalled(boundedContext, q.installed, q.installedDigest); err != nil {
+			return err
+		}
 		final, err := q.leaseReading()
-		if err != nil || final.Monotonic < leading.end() || final.Wall.Before(leading.Wall) || acquisitionExpired(boundedContext) || ctx.Err() != nil {
+		if err != nil || final.Monotonic < leading.end() || final.Wall.Before(leading.Wall) || acquisitionExpired(boundedContext) || acquisitionExpired(q.originalContext) || !time.Now().Before(q.originalDeadline) || ctx.Err() != nil {
 			return unavailable("lease_clock")
 		}
 		return nil

@@ -331,12 +331,8 @@ func TestGraphQLRevocationAtAuditedBackendEntry(t *testing.T) {
 	for _, point := range []string{"intent-sign", "peer-sign", "peer-verify", "peer-release", "peer-recover"} {
 		for _, revoked := range []bool{false, true} {
 			t.Run(point+"/revoked="+strconv.FormatBool(revoked), func(t *testing.T) {
-				fixture := newAuditAdapterFixture(t)
-				authority, request, g, p := labGitHubAuthority(t)
-				fixture.runner.authority = authority
-				fixture.signer.authority = authority
-				fixture.raw = graphEffectRaw(t, fixture.raw, authority, request)
-				fixture.e.f.r = request
+				fixture, lab := newProtectedGitHubAuditFixture(t)
+				g, p := lab.graph.delegate, lab.proof
 				isSign := point == "intent-sign" || point == "peer-sign"
 				if !isSign {
 					if point == "peer-recover" {

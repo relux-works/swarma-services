@@ -74,11 +74,29 @@ func OpenAuditedSigner(dir string, options signingaudit.Options, p Policy, sourc
 	if err != nil {
 		return nil, err
 	}
+	return openAuditedSigner(dir, options, a, policy, nativeTrust, backend)
+}
+
+// OpenAuditedSignerWithPolicySource binds a protected installed-policy route
+// and its externally accepted exact-byte digest before opening the journal.
+// GitHub policy still requires the source-owned protected GraphQL source;
+// neither a generic Source nor empty Matrix configuration selects that route.
+// The constructor does not install or qualify a production provider/backend.
+func OpenAuditedSignerWithPolicySource(ctx context.Context, dir string, options signingaudit.Options, installed PolicySource, expectedSHA256 string, source Source, clock Clock, policy AuditSignerPolicy, nativeTrust signingaudit.TrustMetadata, backend SnapshotSigner) (*AuditedSigner, error) {
+	a, err := NewWithPolicySource(ctx, installed, expectedSHA256, source, clock)
+	if err != nil {
+		return nil, err
+	}
+	return openAuditedSigner(dir, options, a, policy, nativeTrust, backend)
+}
+
+func openAuditedSigner(dir string, options signingaudit.Options, a *Authority, policy AuditSignerPolicy, nativeTrust signingaudit.TrustMetadata, backend SnapshotSigner) (*AuditedSigner, error) {
 	e := policy.Effects
 	if !ascii(policy.Caller, 256) || !text(e.BuilderPeer, 256) || !text(e.SignerPeer, 256) || e.BuilderPeer == e.SignerPeer || !lowerHex(e.RecipeSHA256, 64) || !lowerHex(e.ToolchainSHA256, 64) || e.Target != "darwin/arm64" || !lowerHex(policy.CertificateSHA256, 64) || !lowerHex(policy.RequirementSHA256, 64) || nativeTrust == nil || backend == nil {
 		return nil, signingaudit.ErrInvalid
 	}
 	s := &AuditedSigner{authority: a, policy: policy, backend: backend, nativeTrust: nativeTrust, bindings: make(map[string]*auditBinding)}
+	var err error
 	s.audit, err = signingaudit.Open(dir, options, auditTrust{s}, auditSign{s}, auditRelease{s})
 	if err != nil {
 		return nil, err
@@ -253,6 +271,14 @@ func (s *AuditedSigner) binding(op signingaudit.Operation) (*auditBinding, error
 func (s *AuditedSigner) entry(ctx context.Context, phase signingaudit.Phase, op signingaudit.Operation) (*auditBinding, error) {
 	b, err := s.binding(op)
 	if err != nil || b.phase != phase || b.current.checkFinalEffectContext(ctx) != nil || b.ctx.Err() != nil || ctx.Err() != nil {
+		return nil, signingaudit.ErrAuthority
+	}
+	// The current qualification's final provider/policy reads can consume either
+	// original lease. Check both caps again without acquiring or renewing one.
+	if _, err := b.build.leaseReading(); err != nil {
+		return nil, signingaudit.ErrAuthority
+	}
+	if _, err := b.sign.leaseReading(); err != nil || b.ctx.Err() != nil || ctx.Err() != nil {
 		return nil, signingaudit.ErrAuthority
 	}
 	return b, nil
