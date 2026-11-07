@@ -19,4 +19,4 @@ For patch whitespace only, the repository documents:
 timeout 120s git diff --check
 ```
 
-These checks do not run a signer service, qualify a production toolchain, prove native isolation or authorize signing or installation. No service command, flags, plugin registration, registry entry or install procedure exists for the signer at this source revision.
+These checks do not run a signer service, qualify a production toolchain, prove native isolation or authorize signing or installation. There is no signer service command, plugin registration command, registry entry or install procedure. Constructor injection for the source-authority adapter is covered in [the adapter reference](source-adapter.md); the separate native durability fixture runner is not a signer service.
