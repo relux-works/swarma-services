@@ -83,7 +83,11 @@ func validPolicy(p Policy) bool {
 }
 
 func validReading(r Reading) bool {
-	return !r.Wall.IsZero() && r.Wall.Unix() >= 0 && r.Monotonic >= 0 && text(r.Epoch, 256)
+	const maxDuration = time.Duration(1<<63 - 1)
+	return !r.Wall.IsZero() && r.Wall.Unix() >= 0 && r.Monotonic >= 0 &&
+		r.SampleSpan >= 0 && r.SampleSpan < AuthorityBudget &&
+		r.Monotonic <= maxDuration-r.SampleSpan && !r.wallEnd().Before(r.Wall) &&
+		r.wallEnd().Unix() >= r.Wall.Unix() && text(r.Epoch, 256)
 }
 func validRequest(r Request, p Policy) bool {
 	return lowerHex(r.OperationID, 32) && lowerHex(r.Nonce, 64) && lowerHex(r.Commit, 40) && r.Product == p.Product && r.Repository == p.Alias && r.PolicySHA256 == p.SHA256
@@ -118,10 +122,10 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 		return nil, unavailable("source_read")
 	}
 	now, err := a.clock.Read()
-	if err != nil || !validReading(now) || now.Epoch != start.Epoch || now.Monotonic < start.Monotonic || now.Wall.Before(start.Wall) {
+	if err != nil || !validReading(now) || now.Epoch != start.Epoch || now.Monotonic < start.end() || now.Wall.Before(start.Wall) {
 		return nil, unavailable("clock")
 	}
-	if ctx.Err() != nil || now.Monotonic-start.Monotonic >= AuthorityBudget {
+	if ctx.Err() != nil || now.end()-start.Monotonic >= AuthorityBudget {
 		return nil, unavailable("authority_budget")
 	}
 	if o.Binding != query {
@@ -133,7 +137,7 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	if o.PolicyState != Current {
 		return nil, unavailable("policy_state")
 	}
-	if o.ObservedAt < 0 || o.ExpiresAt <= o.ObservedAt || o.ExpiresAt-o.ObservedAt > 300 || o.ObservedAt > now.Wall.Unix() || now.Wall.Unix() >= o.ExpiresAt {
+	if o.ObservedAt < 0 || o.ExpiresAt <= o.ObservedAt || o.ExpiresAt-o.ObservedAt > 300 || o.ObservedAt > now.Wall.Unix() || now.wallEnd().Unix() >= o.ExpiresAt {
 		return nil, unavailable("lease_clock")
 	}
 	if err := bounded(o, a.policy.Profile); err != nil {
@@ -175,24 +179,25 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	// Parsing/cryptography is inside the SAME authority phase budget, not an
 	// unmetered tail after the Source callback's 30-second deadline.
 	final, err := a.clock.Read()
-	if err != nil || !validReading(final) || final.Epoch != start.Epoch || final.Monotonic < now.Monotonic || final.Wall.Before(now.Wall) {
+	if err != nil || !validReading(final) || final.Epoch != start.Epoch || final.Monotonic < now.end() || final.Wall.Before(now.Wall) {
 		return nil, unavailable("clock")
 	}
-	if ctx.Err() != nil || final.Monotonic-start.Monotonic >= AuthorityBudget {
+	if ctx.Err() != nil || final.end()-start.Monotonic >= AuthorityBudget {
 		return nil, unavailable("authority_budget")
 	}
-	if final.Wall.Unix() < o.ObservedAt || final.Wall.Unix() >= o.ExpiresAt {
+	if final.Wall.Unix() < o.ObservedAt || final.wallEnd().Unix() >= o.ExpiresAt {
 		return nil, unavailable("lease_clock")
 	}
-	// Cap remaining UTC lease at receipt time with same-process monotonic time;
-	// time.Duration arithmetic is overflow-checked before addition.
+	// Anchor the receipt cap at the LEADING endpoint: pairing the old wall
+	// sample with the trailing endpoint would extend the deadline by its span.
+	// Check completion against this cap; arithmetic is checked before addition.
 	remaining := time.Unix(o.ExpiresAt, 0).Sub(now.Wall)
 	const maxDuration = time.Duration(1<<63 - 1)
 	if remaining <= 0 || now.Monotonic > maxDuration-remaining {
 		return nil, unavailable("lease_clock")
 	}
 	deadline := now.Monotonic + remaining
-	if final.Monotonic >= deadline {
+	if final.end() >= deadline {
 		return nil, unavailable("lease_clock")
 	}
 	summary := Summary{Binding: query, Tree: c.tree, OwnerFingerprint: owner, DefaultHead: o.Repository.DefaultHead, Relationship: relationship, PR: o.PR.Number, PlatformReviewID: review.ID, Verdict: "ACCEPT", VerdictBodySHA256: digest, CheckPolicyRef: o.CheckPolicy.Ref, CheckVerdict: checkVerdict, ObservedAt: o.ObservedAt, ExpiresAt: o.ExpiresAt}
