@@ -24,6 +24,10 @@ func New(policy Policy, source Source, clock Clock) (*Authority, error) {
 	p := policy
 	p.Scopes = append([]string(nil), policy.Scopes...)
 	p.ReviewerSenders = append([]string(nil), policy.ReviewerSenders...)
+	p.ReviewerKeys = append([]OwnerKey(nil), policy.ReviewerKeys...)
+	for i := range p.ReviewerKeys {
+		p.ReviewerKeys[i].PublicKey = bytes.Clone(p.ReviewerKeys[i].PublicKey)
+	}
 	p.OwnerKeys = append([]OwnerKey(nil), policy.OwnerKeys...)
 	for i := range p.OwnerKeys {
 		p.OwnerKeys[i].PublicKey = bytes.Clone(p.OwnerKeys[i].PublicKey)
@@ -64,10 +68,11 @@ func unique(values []string, maxBytes int) bool {
 	return true
 }
 func validPolicy(p Policy) bool {
-	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) || !lowerHex(p.SHA256, 64) || !ascii(p.MatrixOrigin, 255) || !text(p.ProducerSender, 255) {
-		return false
-	}
-	if len(p.Scopes) < 1 || len(p.Scopes) > MaxScopes || !unique(p.Scopes, 512) || len(p.ReviewerSenders) == 0 || !unique(p.ReviewerSenders, 255) || len(p.OwnerKeys) == 0 {
+	return validPolicyCommon(p) && ascii(p.MatrixOrigin, 255) && text(p.ProducerSender, 255) && len(p.Scopes) >= 1 && len(p.Scopes) <= MaxScopes && unique(p.Scopes, 512) && len(p.ReviewerSenders) > 0 && unique(p.ReviewerSenders, 255)
+}
+
+func validPolicyCommon(p Policy) bool {
+	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) || !lowerHex(p.SHA256, 64) || len(p.OwnerKeys) == 0 || ValidateReviewerKeys(p, false) != nil {
 		return false
 	}
 	for _, k := range p.OwnerKeys {

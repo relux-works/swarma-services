@@ -42,7 +42,9 @@ type Policy struct {
 	SHA256, MatrixOrigin, ProducerSender                               string
 	ReviewerSenders, Scopes                                            []string
 	OwnerKeys                                                          []OwnerKey
-	Profile                                                            Profile
+	// ReviewerKeys are repository-bound review pins, never commit owners.
+	ReviewerKeys []OwnerKey
+	Profile      Profile
 }
 
 type Phase string
