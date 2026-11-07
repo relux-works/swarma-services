@@ -12,15 +12,21 @@ import (
 // no cross-phase successful observation. Source and Clock implementations must
 // be concurrency safe if the eventual caller uses this component concurrently.
 type Authority struct {
-	policy Policy
-	source Source
-	clock  Clock
+	policy          Policy
+	source          Source
+	clock           Clock
+	installed       PolicySource
+	installedDigest string
 }
 
 func New(policy Policy, source Source, clock Clock) (*Authority, error) {
 	if source == nil || clock == nil || !validPolicy(policy) {
 		return nil, unavailable("configuration")
 	}
+	return &Authority{policy: copyPolicy(policy), source: source, clock: clock}, nil
+}
+
+func copyPolicy(policy Policy) Policy {
 	p := policy
 	p.Scopes = append([]string(nil), policy.Scopes...)
 	p.ReviewerSenders = append([]string(nil), policy.ReviewerSenders...)
@@ -28,7 +34,11 @@ func New(policy Policy, source Source, clock Clock) (*Authority, error) {
 	for i := range p.OwnerKeys {
 		p.OwnerKeys[i].PublicKey = bytes.Clone(p.OwnerKeys[i].PublicKey)
 	}
-	return &Authority{p, source, clock}, nil
+	p.ReviewerKeys = append([]OwnerKey(nil), policy.ReviewerKeys...)
+	for i := range p.ReviewerKeys {
+		p.ReviewerKeys[i].PublicKey = bytes.Clone(p.ReviewerKeys[i].PublicKey)
+	}
+	return p
 }
 
 func text(s string, max int) bool {
@@ -64,10 +74,33 @@ func unique(values []string, maxBytes int) bool {
 	return true
 }
 func validPolicy(p Policy) bool {
-	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) || !lowerHex(p.SHA256, 64) || !ascii(p.MatrixOrigin, 255) || !text(p.ProducerSender, 255) {
+	return lowerHex(p.SHA256, 64) && validPolicyPayload(p, MatrixPolicyRoute)
+}
+
+func validPolicyPayload(p Policy, route PolicyRoute) bool {
+	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) {
 		return false
 	}
-	if len(p.Scopes) < 1 || len(p.Scopes) > MaxScopes || !unique(p.Scopes, 512) || len(p.ReviewerSenders) == 0 || !unique(p.ReviewerSenders, 255) || len(p.OwnerKeys) == 0 {
+	switch route {
+	case MatrixPolicyRoute:
+		if !ascii(p.MatrixOrigin, 255) || !text(p.ProducerSender, 255) || len(p.ReviewerSenders) == 0 || !unique(p.ReviewerSenders, 255) {
+			return false
+		}
+	case GitHubPRPolicyRoute:
+		// This route never borrows a partially configured Matrix authority.
+		if p.CanonicalRepository != GitHubRepository || p.RepositoryName != "relux-works/swarma-keyvault" || p.DefaultBranch != "main" || len(p.Scopes) != 1 || p.Scopes[0] != GitHubReviewScope {
+			return false
+		}
+		if p.Profile.CommitBytes > 1048576 || p.Profile.AncestryCommits > 256 || p.Profile.PlatformReviews > 256 || p.Profile.CheckRecords > 256 {
+			return false
+		}
+		if p.MatrixOrigin != "" || p.ProducerSender != "" || len(p.ReviewerSenders) != 0 {
+			return false
+		}
+	default:
+		return false
+	}
+	if len(p.Scopes) < 1 || len(p.Scopes) > MaxScopes || !unique(p.Scopes, 512) || len(p.OwnerKeys) == 0 || ValidateReviewerKeys(p, route == GitHubPRPolicyRoute) != nil {
 		return false
 	}
 	for _, k := range p.OwnerKeys {
@@ -107,6 +140,9 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	if !validRequest(request, a.policy) {
 		return nil, rejected("request_binding")
 	}
+	if ctx == nil {
+		return nil, unavailable("authority_budget")
+	}
 	start, err := a.clock.Read()
 	if err != nil || !validReading(start) {
 		return nil, unavailable("clock")
@@ -115,6 +151,9 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	defer cancel()
 	if ctx.Err() != nil {
 		return nil, unavailable("authority_budget")
+	}
+	if err := checkInstalled(ctx, a.installed, a.installedDigest); err != nil {
+		return nil, err
 	}
 	query := Query{request, phase}
 	o, err := a.source.Read(ctx, query)
@@ -165,7 +204,7 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 		return nil, rejected("pull_request")
 	}
 	producer := o.Producer
-	if producer.Origin != a.policy.MatrixOrigin || !text(producer.Scope, 512) || !text(producer.Event, 512) || producer.Sender != a.policy.ProducerSender || producer.Repository != a.policy.CanonicalRepository || producer.Head != c.oid || producer.PR != o.PR.Number || producer.State != "intact" {
+	if o.GitHub != nil || producer.Origin != a.policy.MatrixOrigin || !text(producer.Scope, 512) || !text(producer.Event, 512) || producer.Sender != a.policy.ProducerSender || producer.Repository != a.policy.CanonicalRepository || producer.Head != c.oid || producer.PR != o.PR.Number || producer.State != "intact" {
 		return nil, rejected("producer_handoff")
 	}
 	review, digest, err := verifyReview(o, a.policy)
@@ -174,6 +213,9 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	}
 	checkVerdict, err := verifyChecks(o, a.policy)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkInstalled(ctx, a.installed, a.installedDigest); err != nil {
 		return nil, err
 	}
 	// Parsing/cryptography is inside the SAME authority phase budget, not an
@@ -201,7 +243,7 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 		return nil, unavailable("lease_clock")
 	}
 	summary := Summary{Binding: query, Tree: c.tree, OwnerFingerprint: owner, DefaultHead: o.Repository.DefaultHead, Relationship: relationship, PR: o.PR.Number, PlatformReviewID: review.ID, Verdict: "ACCEPT", VerdictBodySHA256: digest, CheckPolicyRef: o.CheckPolicy.Ref, CheckVerdict: checkVerdict, ObservedAt: o.ObservedAt, ExpiresAt: o.ExpiresAt}
-	return &Qualification{summary: summary, clock: a.clock, start: final, deadline: deadline}, nil
+	return &Qualification{summary: summary, clock: a.clock, start: final, deadline: deadline, installed: a.installed, installedDigest: a.installedDigest}, nil
 }
 
 func bounded(o Observation, p Profile) error {

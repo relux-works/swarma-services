@@ -128,11 +128,14 @@ func verifyOwner(c gitCommit, policy Policy) (string, error) {
 	if len(c.signature) == 0 {
 		return "", rejected("unsigned_commit")
 	}
+	if len(c.signature) > MaxSignatureArmorBytes {
+		return "", rejected("commit_signature")
+	}
 	block, rest := pem.Decode(c.signature)
 	if block == nil || block.Type != "SSH SIGNATURE" || len(block.Headers) != 0 || len(rest) != 0 || !bytes.HasPrefix(c.signature, []byte("-----BEGIN SSH SIGNATURE-----\n")) {
 		return "", rejected("commit_signature")
 	}
-	if !bytes.HasPrefix(block.Bytes, []byte("SSHSIG")) {
+	if len(block.Bytes) > MaxSSHSIGBytes || !bytes.HasPrefix(block.Bytes, []byte("SSHSIG")) {
 		return "", rejected("commit_signature")
 	}
 	r := sshReader{b: block.Bytes[6:]}

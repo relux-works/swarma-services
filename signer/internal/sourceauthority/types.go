@@ -39,10 +39,13 @@ type OwnerKey struct {
 // display names, relays and publishing hosting accounts establish no identity.
 type Policy struct {
 	Product, Alias, CanonicalRepository, RepositoryName, DefaultBranch string
-	SHA256, MatrixOrigin, ProducerSender                               string
-	ReviewerSenders, Scopes                                            []string
-	OwnerKeys                                                          []OwnerKey
-	Profile                                                            Profile
+	// SHA256 is derived from exact installed bytes, never serialized in them.
+	SHA256                       string `json:"-"`
+	MatrixOrigin, ProducerSender string
+	ReviewerSenders, Scopes      []string
+	OwnerKeys                    []OwnerKey
+	ReviewerKeys                 []OwnerKey `json:",omitempty"`
+	Profile                      Profile
 }
 
 type Phase string
@@ -135,6 +138,7 @@ type Observation struct {
 	LandingPath [][]byte
 	PR          PullRequest
 	Producer    ProducerHandoff
+	GitHub      *GitHubHandoff
 	Reviews     ReviewInventory
 	Checks      CheckInventory
 	CheckPolicy CheckPolicy
@@ -146,6 +150,7 @@ type RepositoryRecord struct {
 }
 
 type PullRequest struct {
+	BaseBranch, HeadRepository    string
 	Repository, Head, Base, State string // State must be merged, never draft/open.
 	Number                        uint64
 }
@@ -168,6 +173,8 @@ type ReviewInventory struct {
 }
 
 type PlatformReview struct {
+	AccountID                                     uint64
+	AccountLogin                                  string
 	Repository, ID, Head, Base, Kind, State, Body string
 	PR                                            uint64
 	SubmittedAt                                   int64
@@ -249,10 +256,12 @@ type Summary struct {
 // Qualification has immutable private state; the zero value is absent. It can
 // only be produced by a complete boundary refresh through the configured Source.
 type Qualification struct {
-	summary  Summary
-	clock    Clock
-	start    Reading
-	deadline time.Duration
+	summary         Summary
+	clock           Clock
+	start           Reading
+	deadline        time.Duration
+	installed       PolicySource
+	installedDigest string
 }
 
 func (q *Qualification) Summary() (Summary, bool) {
@@ -262,16 +271,69 @@ func (q *Qualification) Summary() (Summary, bool) {
 	return q.summary, true
 }
 
-// CheckFreshness checks only the local lease; it never rechecks revocation or
-// establishes another phase. BeforeSign must perform its OWN fresh Source read.
+// CheckFreshness checks the local lease and, for protected qualifications, the
+// current installed digest. It never refreshes provider evidence or establishes
+// another phase. BeforeSign must perform its OWN fresh Source read.
 // Monotonic capping prevents backward wall movement from extending the lease.
 func (q *Qualification) CheckFreshness() error {
+	return q.CheckFreshnessContext(context.Background())
+}
+
+// CheckFreshnessContext additionally rereads installed policy for protected
+// qualifications. Effects must supply the original job context. This does not
+// renew the qualification or replace BeforeSign's independent source read.
+func (q *Qualification) CheckFreshnessContext(ctx context.Context) error {
 	if q == nil || q.clock == nil {
 		return unavailable("absent_qualification")
 	}
-	now, err := q.clock.Read()
-	if err != nil || !validReading(now) || now.Epoch != q.start.Epoch || now.Monotonic < q.start.end() || now.end() >= q.deadline || now.Wall.Before(q.start.Wall) || now.Wall.Unix() < q.summary.ObservedAt || now.wallEnd().Unix() >= q.summary.ExpiresAt {
+	if ctx == nil {
+		return unavailable("authority_budget")
+	}
+	// Preserve the in-memory route's original point-reading semantics. A
+	// simulated one-nanosecond lease is not a real filesystem timeout budget.
+	if q.installed == nil {
+		if ctx.Err() != nil {
+			return unavailable("authority_budget")
+		}
+		_, err := q.leaseReading()
+		if ctx.Err() != nil {
+			return unavailable("authority_budget")
+		}
+		return err
+	}
+	leading, err := q.leaseReading()
+	if err != nil {
+		return err
+	}
+	remaining := q.deadline - leading.end()
+	if remaining > AuthorityBudget {
+		remaining = AuthorityBudget
+	}
+	ctx, cancel := context.WithTimeout(ctx, remaining)
+	defer cancel()
+	if err := checkInstalled(ctx, q.installed, q.installedDigest); err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return unavailable("authority_budget")
+	}
+	final, err := q.leaseReading()
+	if ctx.Err() != nil {
+		return unavailable("authority_budget")
+	}
+	if err != nil {
+		return err
+	}
+	if final.Monotonic < leading.end() || final.Wall.Before(leading.Wall) {
 		return unavailable("lease_clock")
 	}
 	return nil
+}
+
+func (q *Qualification) leaseReading() (Reading, error) {
+	now, err := q.clock.Read()
+	if err != nil || !validReading(now) || now.Epoch != q.start.Epoch || now.Monotonic < q.start.end() || now.end() >= q.deadline || now.Wall.Before(q.start.Wall) || now.Wall.Unix() < q.summary.ObservedAt || now.wallEnd().Unix() >= q.summary.ExpiresAt {
+		return Reading{}, unavailable("lease_clock")
+	}
+	return now, nil
 }

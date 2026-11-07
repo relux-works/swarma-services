@@ -58,6 +58,13 @@ effect adapters have no production implementation. Source controls do not admit
 policy, peers, native builders, signing or durable operation recovery; the
 existing native readiness refusal remains unchanged.
 
+`OpenAuditedSigner` implements the concrete `SignerEffect` bridge to the existing
+`signingaudit` journal. It computes exact body and snapshot bindings, refreshes
+current trust before durable intent, separates durable outcome from fetch, and
+never signs during reconciliation. It retains original contexts/leases in memory;
+old operations refuse recovery/fetch after restart without an agreed custody
+contract. Native endpoint, admission and durability qualification remain required.
+
 The public decoder admits at most 1,048,576 actual BODY bytes. Entries are nonempty and at most 8,192; receipt
 records are at most 512; regular files are at most 64 MiB and their checked sum at most 1 GiB. Decoded entry paths,
 link targets and module paths are bounded at 1,024 UTF-8 bytes; module versions at 128 ASCII bytes. Source symlink
