@@ -1,8 +1,8 @@
 # Protected local Policy snapshots
 
 `internal/sourceauthority` provides `EncodePolicy`, `DecodePolicy` and a Linux
-`ProtectedPolicySource`. This is the core's local configuration, with its exact
-existing `Policy`, `OwnerKey` and `Profile` fields. It adds no wire record,
+`ProtectedPolicySource`. This is the core's local configuration, with the
+configuration fields of `Policy`, `OwnerKey` and `Profile`. It adds no wire record,
 identity, grant, adoption object, provider authority or selected policy values.
 An installation custodian must obtain acceptance of the exact bytes and their
 full SHA-256 before installing anything. This source does not install a file.
@@ -12,14 +12,14 @@ The native field mapping is closed and case-sensitive:
 | Native field | JSON representation |
 | --- | --- |
 | Product, Alias, CanonicalRepository, RepositoryName, DefaultBranch | Strings with those exact field names |
-| SHA256, MatrixOrigin, ProducerSender | Strings with those exact field names |
+| MatrixOrigin, ProducerSender | Strings with those exact field names |
 | ReviewerSenders, Scopes | Ordered arrays of strings |
 | OwnerKeys | Ordered array of objects containing exactly Fingerprint, PublicKey, Repository |
 | OwnerKeys[].PublicKey | Standard padded-base64 encoding of the existing binary SSH public-key bytes |
 | Profile | Object containing exactly AncestryCommits, CheckRecords, CommitBytes, PlatformReviews, all integers |
 
-Every existing field is present. There is no enclosing object or schema version.
-The core struct and its validity predicate are unchanged. Unknown, omitted,
+`Policy.SHA256` is excluded from the payload. All eleven configuration fields
+are present. There is no enclosing object or schema version. Unknown, omitted,
 duplicated, incorrectly cased or wrongly typed fields at any depth refuse.
 Noncanonical bytes refuse, including whitespace, alternate string escapes,
 member order, BOM, invalid UTF-8, lone surrogates, floats, exponents and unsafe
@@ -32,15 +32,36 @@ package name and refusal plumbing are adapted. It sorts member names by Unicode
 scalar value, uses minimal string escapes and shortest integer spelling. It
 introduces no module dependency or dependency upgrade.
 
-`Policy.SHA256` is an existing core identity field. It is preserved verbatim.
-It cannot equal the hash of the full bytes that include itself without solving
-a self-reference. `PolicySnapshot.SHA256()` separately hashes the complete
-installed bytes. The admission element must retain that full-file digest;
-request/observation bindings retain the existing core identity. A composition
-must preserve this distinction and must not omit, zero or overwrite the native
-field to manufacture an undocumented hash recipe. If an existing admission
-contract requires these two values to be equal, it needs an explicit disposition
-before use; this loader does not silently change that contract.
+The installer computes SHA-256 over the exact complete installed bytes and
+records it on the admission element. At launch the custodian supplies that
+expected digest to `NewWithPolicySource(ctx, source, expectedSHA256, provider,
+clock)` or the corresponding effect-runner constructor. A missing, malformed or
+mismatched digest refuses before provider acquisition. The core never treats a
+digest learned from the current file as admission. `DecodePolicy` derives the
+in-memory `Policy.SHA256` from the complete bytes, so request, observation and
+effect bindings use the same exact-byte digest as `PolicySnapshot.SHA256()`.
+The payload never contains its own digest. Legacy `SHA256` fields, including
+zero-valued or matching values, refuse as unknown fields. No self-hash,
+placeholder, exclusion-at-hash-time or zeroing convention is used.
+
+`EncodePolicy` and `DecodePolicy` select the existing Matrix configuration.
+That route requires nonempty `MatrixOrigin`, `ProducerSender` and
+`ReviewerSenders`; none is defaulted. `EncodePolicyForRoute` and
+`DecodePolicyForRoute` require an explicit `PolicyRoute`. Only
+`GitHubPRPolicyRoute` accepts the three fields set to `""`, `""`, and `[]`.
+The fields remain mandatory in serialized bytes; omissions and null arrays
+refuse. Mixed Matrix identities in a GitHub policy also refuse. Empty or unknown
+route selectors refuse. Route selection is a trusted constructor choice outside
+the payload and request, independent of reviewer-signature syntax.
+
+`NewProtectedPolicySourceForRoute` fixes the explicit route with path and UID.
+`NewProtectedPolicySource` selects the existing Matrix loader and cannot infer
+GitHub from empty identities. The protected Authority/effect constructors in
+this candidate implement the Matrix route only. A GitHub snapshot refuses with
+`policy_route_unbound`, before any provider read. Its actual PR-source mapping,
+reviewer public-pin field mapping, signature format/namespace and single lab
+scope require the separately agreed contract and implementation; the codec does
+not invent them or qualify GitHub evidence. No partial policy is installable.
 
 The trusted custodian constructs `NewProtectedPolicySource(ctx, absolutePath,
 expectedUID)` outside request handling. The file must be owned by exactly that
@@ -65,10 +86,10 @@ accessors return fresh owned copies of every byte and mutable native field.
 
 Use `NewWithPolicySource` for the protected Authority route, or
 `NewEffectRunnerWithPolicySource` for the existing effect composition. Construction
-binds both native identity and installed-byte digest. BeforeBuild and BeforeSign
+binds the admission-supplied exact-byte digest. BeforeBuild and BeforeSign
 each reread installed policy before acquiring provider evidence and again before
 issuing qualification, within the same phase context. A changed raw digest,
-including a key removal with an unchanged native identity, refuses the old
+including a key removal, refuses the old
 authority. Missing, malformed or unsafe current installation refuses as unknown.
 An authorized reinstall therefore requires a newly constructed authority/runner.
 No previous snapshot or successful build provides a fallback.
@@ -94,7 +115,12 @@ Controls use only declared public policy fixtures in private temporary trees:
 regular/mode/ownership/size, symlink and hardlink refusals, directory substitution,
 nonblocking FIFO refusal, cancellation, canonical field/byte neighbors, independent
 phase reads, raced provider-read replacement, atomic replacement with no hybrid
-snapshot and stale-lease refusal. They establish local source behavior only.
+snapshot and stale-lease refusal. Serialization controls pair an independently
+computed exact-byte digest with missing/mismatched launch admission, embedded
+legacy digest fields and changed in-memory identity values. Route controls pair
+complete Matrix and explicit empty-field GitHub codec/snapshot cases with wrong,
+unknown, partially unset, mixed, omitted and null neighbors and the unbound
+GitHub authority refusal. They establish local source behavior only.
 No actual installed policy, public owner pin, native provider, build, signing,
 first-run execution or deployment is qualified by these tests. The final signed
 candidate still requires independent exact-head review and its admission marker.

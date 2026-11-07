@@ -59,8 +59,11 @@ policy, peers, native builders, signing or durable operation recovery; the
 existing native readiness refusal remains unchanged.
 
 The [protected local Policy loader](docs/protected-policy.md) serializes only the
-existing core fields as CCJ-1, validates a fixed custodian-owned Linux file and
-binds its complete byte digest across independent boundary/freshness reads.
+configuration fields as CCJ-1, keeps the digest outside the payload, validates a
+fixed custodian-owned Linux file and requires the admission's exact-byte digest
+at launch. It binds that digest across independent boundary/freshness reads.
+Explicit route guards refuse unset Matrix identities on the Matrix route;
+GitHub policy decoding does not yet bind its separately owned verifier.
 It supplies source only; exact-byte admission, installation and independent
 review remain required before the protected route is used.
 

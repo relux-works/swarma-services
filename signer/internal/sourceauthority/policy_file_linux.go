@@ -25,15 +25,25 @@ type ProtectedPolicySource struct {
 	parts []string
 	uid   uint32
 	dirs  []syscall.Stat_t
+	route PolicyRoute
 }
 
 func NewProtectedPolicySource(ctx context.Context, path string, uid uint32) (*ProtectedPolicySource, error) {
+	return NewProtectedPolicySourceForRoute(ctx, path, uid, MatrixPolicyRoute)
+}
+
+// NewProtectedPolicySourceForRoute fixes the route alongside path and UID.
+// Empty or unsupported routes refuse; no missing Matrix identity is defaulted.
+func NewProtectedPolicySourceForRoute(ctx context.Context, path string, uid uint32, route PolicyRoute) (*ProtectedPolicySource, error) {
+	if route != MatrixPolicyRoute && route != GitHubPRPolicyRoute {
+		return nil, unavailable("policy_route")
+	}
 	if ctx == nil || !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" || strings.ContainsRune(path, 0) {
 		return nil, unavailable("policy_path")
 	}
 	ctx, cancel := context.WithTimeout(ctx, AuthorityBudget)
 	defer cancel()
-	s := &ProtectedPolicySource{parts: strings.Split(path[1:], "/"), uid: uid}
+	s := &ProtectedPolicySource{parts: strings.Split(path[1:], "/"), uid: uid, route: route}
 	f, dirs, err := s.open(ctx)
 	if err != nil {
 		return nil, err
@@ -178,7 +188,7 @@ func (s *ProtectedPolicySource) Snapshot(ctx context.Context) (*PolicySnapshot, 
 	if !sameFile(st, st2) || !bytes.Equal(raw, second) {
 		return nil, unavailable("policy_changed")
 	}
-	snap, err := policySnapshot(raw)
+	snap, err := policySnapshotForRoute(raw, s.route)
 	if err != nil {
 		return nil, err
 	}

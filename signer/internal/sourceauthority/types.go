@@ -39,10 +39,12 @@ type OwnerKey struct {
 // display names, relays and publishing hosting accounts establish no identity.
 type Policy struct {
 	Product, Alias, CanonicalRepository, RepositoryName, DefaultBranch string
-	SHA256, MatrixOrigin, ProducerSender                               string
-	ReviewerSenders, Scopes                                            []string
-	OwnerKeys                                                          []OwnerKey
-	Profile                                                            Profile
+	// SHA256 is derived from exact installed bytes, never serialized in them.
+	SHA256                       string `json:"-"`
+	MatrixOrigin, ProducerSender string
+	ReviewerSenders, Scopes      []string
+	OwnerKeys                    []OwnerKey
+	Profile                      Profile
 }
 
 type Phase string

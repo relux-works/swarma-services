@@ -12,16 +12,26 @@ import (
 
 const MaxPolicyBytes = 64 << 10
 
+// PolicyRoute is a trusted launch/installation choice, never request input or
+// an inferred default. It does not select a signature format or provider mapper.
+type PolicyRoute string
+
+const (
+	MatrixPolicyRoute   PolicyRoute = "matrix"
+	GitHubPRPolicyRoute PolicyRoute = "github-pr"
+)
+
 // PolicySource is a trusted constructor-bound installation dependency, never
 // release caller input. Snapshot must read current installed state and obey ctx.
 type PolicySource interface {
 	Snapshot(context.Context) (*PolicySnapshot, error)
 }
 
-// NewWithPolicySource binds both the existing core identity and the full raw
-// installed digest. No successful read is cached across qualification phases.
-func NewWithPolicySource(ctx context.Context, installed PolicySource, source Source, clock Clock) (*Authority, error) {
-	if installed == nil || ctx == nil {
+// NewWithPolicySource requires the expected exact-byte digest supplied from the
+// admission record at launch. It never learns admission from the installed file.
+// No successful read is cached across qualification phases.
+func NewWithPolicySource(ctx context.Context, installed PolicySource, expectedSHA256 string, source Source, clock Clock) (*Authority, error) {
+	if installed == nil || ctx == nil || !lowerHex(expectedSHA256, 64) {
 		return nil, unavailable("policy_configuration")
 	}
 	ctx, cancel := context.WithTimeout(ctx, AuthorityBudget)
@@ -33,6 +43,15 @@ func NewWithPolicySource(ctx context.Context, installed PolicySource, source Sou
 	if err != nil || s == nil || ctx.Err() != nil {
 		return nil, unavailable("policy_read")
 	}
+	if s.SHA256() != expectedSHA256 {
+		return nil, rejected("policy_admission_digest")
+	}
+	// This Authority implements the Matrix verifier. The independently owned
+	// GitHub mapper/signature contract must be composed before that route can
+	// construct an authority; an empty Matrix configuration is never a fallback.
+	if s.route != MatrixPolicyRoute {
+		return nil, unavailable("policy_route_unbound")
+	}
 	a, err := New(s.PolicyCopy(), source, clock)
 	if err != nil {
 		return nil, err
@@ -40,7 +59,7 @@ func NewWithPolicySource(ctx context.Context, installed PolicySource, source Sou
 	if ctx.Err() != nil {
 		return nil, unavailable("policy_deadline")
 	}
-	a.installed, a.installedDigest = installed, s.SHA256()
+	a.installed, a.installedDigest = installed, expectedSHA256
 	return a, nil
 }
 
@@ -61,19 +80,28 @@ func checkInstalled(ctx context.Context, installed PolicySource, digest string) 
 	return nil
 }
 
-// EncodePolicy serializes ONLY the existing native Policy fields, using their
+// EncodePolicy serializes the configuration fields, excluding SHA256, using their
 // exact Go field names, []byte's standard padded base64 and CCJ-1 canonical
 // bytes. There is no wrapper, version, grant, adoption or authority object.
-// SHA256 remains the core policy identifier; it is not a self-hash. The full
-// installed byte digest is separately returned by PolicySnapshot.SHA256.
+// SHA256 is derived only after serialization and is never an input to these bytes.
 func EncodePolicy(p Policy) ([]byte, error) {
+	return EncodePolicyForRoute(p, MatrixPolicyRoute)
+}
+
+// EncodePolicyForRoute explicitly selects configuration validity. GitHub-PR
+// payloads keep the three unused Matrix fields present and empty. This codec
+// alone grants no GitHub verification or reviewer-signature authority.
+func EncodePolicyForRoute(p Policy, route PolicyRoute) ([]byte, error) {
 	// Every nonempty string/owner array member costs at least four canonical
 	// bytes. Bound collections before the unchanged core validator allocates.
 	if len(p.ReviewerSenders) > MaxPolicyBytes/4 || len(p.OwnerKeys) > MaxPolicyBytes/4 {
 		return nil, unavailable("policy_capacity")
 	}
-	if !validPolicy(p) {
+	if !validPolicyPayload(p, route) {
 		return nil, unavailable("policy_configuration")
+	}
+	if p.ReviewerSenders == nil {
+		p.ReviewerSenders = []string{}
 	}
 	b, err := json.Marshal(p)
 	// Go's temporary string escaping can be up to six times CCJ-1's length.
@@ -96,6 +124,11 @@ func EncodePolicy(p Policy) ([]byte, error) {
 // mapping at every depth. Round-trip equality rejects omitted/extra fields,
 // wrong case, null aliases and noncanonical base64 as well as CCJ-1 violations.
 func DecodePolicy(raw []byte) (Policy, error) {
+	return DecodePolicyForRoute(raw, MatrixPolicyRoute)
+}
+
+// DecodePolicyForRoute never infers a route from missing identity fields.
+func DecodePolicyForRoute(raw []byte, route PolicyRoute) (Policy, error) {
 	var p Policy
 	if len(raw) == 0 || len(raw) > MaxPolicyBytes {
 		return p, unavailable("policy_capacity")
@@ -111,10 +144,12 @@ func DecodePolicy(raw []byte) (Policy, error) {
 	if json.Unmarshal(raw, &p) != nil {
 		return Policy{}, unavailable("policy_encoding")
 	}
-	b, err := EncodePolicy(p)
+	b, err := EncodePolicyForRoute(p, route)
 	if err != nil || !bytes.Equal(raw, b) {
 		return Policy{}, unavailable("policy_configuration")
 	}
+	h := sha256.Sum256(raw)
+	p.SHA256 = hex.EncodeToString(h[:])
 	return p, nil
 }
 
@@ -123,6 +158,7 @@ func DecodePolicy(raw []byte) (Policy, error) {
 type PolicySnapshot struct {
 	raw    []byte
 	digest string
+	route  PolicyRoute
 }
 
 func (s *PolicySnapshot) SHA256() string {
@@ -141,14 +177,18 @@ func (s *PolicySnapshot) PolicyCopy() Policy {
 	if s == nil {
 		return Policy{}
 	}
-	p, _ := DecodePolicy(s.raw)
+	p, _ := DecodePolicyForRoute(s.raw, s.route)
 	return p
 }
 
 func policySnapshot(raw []byte) (*PolicySnapshot, error) {
-	if _, err := DecodePolicy(raw); err != nil {
+	return policySnapshotForRoute(raw, MatrixPolicyRoute)
+}
+
+func policySnapshotForRoute(raw []byte, route PolicyRoute) (*PolicySnapshot, error) {
+	if _, err := DecodePolicyForRoute(raw, route); err != nil {
 		return nil, err
 	}
 	h := sha256.Sum256(raw)
-	return &PolicySnapshot{bytes.Clone(raw), hex.EncodeToString(h[:])}, nil
+	return &PolicySnapshot{bytes.Clone(raw), hex.EncodeToString(h[:]), route}, nil
 }

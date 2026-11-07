@@ -115,8 +115,8 @@ func NewEffectRunner(p Policy, source Source, clock Clock, effects EffectPolicy,
 // at construction. Both phases and their final freshness checks use the same
 // fixed installation path and bound full-file digest; a reinstall requires a
 // newly constructed runner. No runtime or production adapter is installed here.
-func NewEffectRunnerWithPolicySource(ctx context.Context, installed PolicySource, source Source, clock Clock, effects EffectPolicy, builder BuilderEffect, signer SignerEffect, audit BoundaryAudit) (*EffectRunner, error) {
-	a, err := NewWithPolicySource(ctx, installed, source, clock)
+func NewEffectRunnerWithPolicySource(ctx context.Context, installed PolicySource, expectedSHA256 string, source Source, clock Clock, effects EffectPolicy, builder BuilderEffect, signer SignerEffect, audit BoundaryAudit) (*EffectRunner, error) {
+	a, err := NewWithPolicySource(ctx, installed, expectedSHA256, source, clock)
 	if err != nil {
 		return nil, err
 	}

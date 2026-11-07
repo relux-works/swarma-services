@@ -27,6 +27,7 @@ func installedFixture(t *testing.T) (*fixture, *ProtectedPolicySource, string, [
 	if err != nil {
 		t.Fatal(err)
 	}
+	bindFixturePolicyBytes(f, b)
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -40,6 +41,13 @@ func installedFixture(t *testing.T) (*fixture, *ProtectedPolicySource, string, [
 		t.Fatal(err)
 	}
 	return f, s, path, b
+}
+
+func bindFixturePolicyBytes(f *fixture, raw []byte) {
+	h := sha256.Sum256(raw)
+	f.p.SHA256 = hex.EncodeToString(h[:])
+	f.r.PolicySHA256 = f.p.SHA256
+	f.s.observation.PolicySHA256 = f.p.SHA256
 }
 
 func reinstall(t *testing.T, path string, b []byte) {
@@ -60,7 +68,7 @@ func TestProtectedPolicyNativeMappingAndOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := sha256.Sum256(raw)
-	if snap.SHA256() != hex.EncodeToString(h[:]) || snap.PolicyCopy().SHA256 != f.p.SHA256 || snap.SHA256() == f.p.SHA256 {
+	if snap.SHA256() != hex.EncodeToString(h[:]) || snap.PolicyCopy().SHA256 != f.p.SHA256 || snap.SHA256() != f.p.SHA256 {
 		t.Fatal("raw and native identity binding")
 	}
 	copy := snap.PolicyCopy()
@@ -77,13 +85,167 @@ func TestProtectedPolicyNativeMappingAndOwnership(t *testing.T) {
 		t.Fatal("snapshot aliases native field copies")
 	}
 	var fields map[string]any
-	if json.Unmarshal(raw, &fields) != nil || len(fields) != 12 {
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 11 {
 		t.Fatal("native shape changed")
 	}
-	for _, name := range []string{"Product", "Alias", "CanonicalRepository", "RepositoryName", "DefaultBranch", "SHA256", "MatrixOrigin", "ProducerSender", "ReviewerSenders", "Scopes", "OwnerKeys", "Profile"} {
+	if _, present := fields["SHA256"]; present {
+		t.Fatal("digest serialized inside its payload")
+	}
+	for _, name := range []string{"Product", "Alias", "CanonicalRepository", "RepositoryName", "DefaultBranch", "MatrixOrigin", "ProducerSender", "ReviewerSenders", "Scopes", "OwnerKeys", "Profile"} {
 		if _, ok := fields[name]; !ok {
 			t.Fatalf("missing native field %s", name)
 		}
+	}
+}
+
+func TestProtectedPolicyDigestOutsidePayloadAndLaunchAdmission(t *testing.T) {
+	f, s, _, raw := installedFixture(t)
+	// An independent full-byte SHA is the sole protected-route policy binding.
+	h := sha256.Sum256(raw)
+	expected := hex.EncodeToString(h[:])
+	for _, identity := range []string{"", "ignored-opaque-identity", strings.Repeat("0", 64), expected} {
+		p := f.p
+		p.SHA256 = identity
+		b, err := EncodePolicy(p)
+		if err != nil || !bytes.Equal(raw, b) {
+			t.Fatal("in-memory digest influenced payload bytes")
+		}
+	}
+	p, err := DecodePolicy(raw)
+	if err != nil || p.SHA256 != expected {
+		t.Fatal("decoded policy did not bind exact bytes")
+	}
+	// Canonically sorted legacy/self-hash fields must refuse, even if their
+	// value matches the expected digest or a former zeroing convention.
+	for _, name := range []string{"SHA256", "sha256"} {
+		for _, value := range []string{expected, strings.Repeat("0", 64)} {
+			var fields map[string]any
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			fields[name] = value
+			b, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodePolicy(b); err == nil {
+				t.Fatal("serialized digest field accepted")
+			}
+		}
+	}
+	for _, digest := range []string{"", "bad", strings.ToUpper(expected), strings.Repeat("0", 64), strings.Repeat("f", 64), expected} {
+		a, err := NewWithPolicySource(context.Background(), s, digest, f.s, f.c)
+		if digest == expected {
+			if err != nil || a == nil {
+				t.Fatalf("exact launch admission refused: %v", err)
+			}
+		} else if err == nil || a != nil {
+			t.Fatal("missing, malformed or mismatched launch digest admitted")
+		}
+	}
+	if len(f.s.queries) != 0 {
+		t.Fatal("launch digest validation acquired provider evidence")
+	}
+}
+
+func TestProtectedPolicyExplicitRouteGuards(t *testing.T) {
+	f, _, path, matrixRaw := installedFixture(t)
+	github := f.p
+	github.MatrixOrigin, github.ProducerSender, github.ReviewerSenders = "", "", []string{}
+	raw, err := EncodePolicyForRoute(github, GitHubPRPolicyRoute)
+	if err != nil {
+		t.Fatalf("explicit GitHub unset fields refused by codec: %v", err)
+	}
+	p, err := DecodePolicyForRoute(raw, GitHubPRPolicyRoute)
+	if err != nil || p.MatrixOrigin != "" || p.ProducerSender != "" || len(p.ReviewerSenders) != 0 {
+		t.Fatal("GitHub codec filled unused Matrix identities")
+	}
+	for _, route := range []PolicyRoute{"", "unknown", MatrixPolicyRoute} {
+		if _, err := EncodePolicyForRoute(github, route); err == nil {
+			t.Fatal("unset Matrix identities accepted outside explicit GitHub route")
+		}
+		if _, err := DecodePolicyForRoute(raw, route); err == nil {
+			t.Fatal("unset Matrix identities decoded outside explicit GitHub route")
+		}
+	}
+	if _, err := DecodePolicyForRoute(matrixRaw, MatrixPolicyRoute); err != nil {
+		t.Fatal("complete Matrix positive control refused")
+	}
+	for _, field := range []string{"origin", "producer", "reviewers"} {
+		t.Run(field, func(t *testing.T) {
+			partial := f.p
+			switch field {
+			case "origin":
+				partial.MatrixOrigin = ""
+			case "producer":
+				partial.ProducerSender = ""
+			case "reviewers":
+				partial.ReviewerSenders = nil
+			}
+			if _, err := EncodePolicy(partial); err == nil {
+				t.Fatal("partially unset Matrix policy serialized")
+			}
+			if _, err := New(partial, f.s, f.c); err == nil {
+				t.Fatal("Matrix authority accepted a missing identity")
+			}
+			mixed := github
+			switch field {
+			case "origin":
+				mixed.MatrixOrigin = f.p.MatrixOrigin
+			case "producer":
+				mixed.ProducerSender = f.p.ProducerSender
+			case "reviewers":
+				mixed.ReviewerSenders = f.p.ReviewerSenders
+			}
+			if _, err := EncodePolicyForRoute(mixed, GitHubPRPolicyRoute); err == nil {
+				t.Fatal("GitHub policy borrowed a Matrix identity")
+			}
+		})
+	}
+	for _, mutate := range []func(map[string]any){
+		func(m map[string]any) { delete(m, "MatrixOrigin") },
+		func(m map[string]any) { delete(m, "ProducerSender") },
+		func(m map[string]any) { delete(m, "ReviewerSenders") },
+		func(m map[string]any) { delete(m, "Scopes") },
+		func(m map[string]any) { m["ReviewerSenders"] = nil },
+		func(m map[string]any) { m["ReviewerKeys"] = []any{} },
+	} {
+		var fields map[string]any
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		mutate(fields)
+		bad, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodePolicyForRoute(bad, GitHubPRPolicyRoute); err == nil {
+			t.Fatal("GitHub codec accepted omitted or null identity fields")
+		}
+	}
+	reinstall(t, path, raw)
+	if _, err := NewProtectedPolicySource(context.Background(), path, uint32(os.Geteuid())); err == nil {
+		t.Fatal("Matrix file loader inferred GitHub from unset fields")
+	}
+	for _, route := range []PolicyRoute{"", "unknown"} {
+		if _, err := NewProtectedPolicySourceForRoute(context.Background(), path, uint32(os.Geteuid()), route); err == nil {
+			t.Fatal("file loader defaulted an unknown route")
+		}
+	}
+	s, err := NewProtectedPolicySourceForRoute(context.Background(), path, uint32(os.Geteuid()), GitHubPRPolicyRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Snapshot(context.Background())
+	if err != nil || !bytes.Equal(snap.RawCopy(), raw) || snap.PolicyCopy().SHA256 != p.SHA256 {
+		t.Fatal("explicit GitHub protected snapshot changed its binding")
+	}
+	// Until the independently owned GitHub mapping/verdict contract is composed,
+	// these bytes may be inspected but cannot fall through the Matrix authority.
+	a, err := NewWithPolicySource(context.Background(), s, p.SHA256, f.s, f.c)
+	var refusal *Refusal
+	if a != nil || !errors.As(err, &refusal) || refusal.Predicate() != "policy_route_unbound" || len(f.s.queries) != 0 {
+		t.Fatalf("unbound GitHub route reached Matrix authority: %v", err)
 	}
 }
 
@@ -263,7 +425,7 @@ func TestProtectedPolicyCancellationAndDeadline(t *testing.T) {
 
 func TestProtectedPolicyAtomicUpdateAndOldLease(t *testing.T) {
 	f, s, path, _ := installedFixture(t)
-	a, err := NewWithPolicySource(context.Background(), s, f.s, f.c)
+	a, err := NewWithPolicySource(context.Background(), s, f.p.SHA256, f.s, f.c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +434,7 @@ func TestProtectedPolicyAtomicUpdateAndOldLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := f.p
-	p.DefaultBranch = "replacement" // intentionally retain native SHA256
+	p.DefaultBranch = "replacement"
 	b, err := EncodePolicy(p)
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +450,10 @@ func TestProtectedPolicyAtomicUpdateAndOldLease(t *testing.T) {
 	if err != nil || newSnapshot.PolicyCopy().DefaultBranch != "replacement" {
 		t.Fatal("atomic reinstall not read")
 	}
-	if _, err := NewWithPolicySource(context.Background(), s, f.s, f.c); err != nil {
+	if _, err := NewWithPolicySource(context.Background(), s, f.p.SHA256, f.s, f.c); !errors.Is(err, ErrRejected) {
+		t.Fatal("replacement admitted with old launch digest")
+	}
+	if _, err := NewWithPolicySource(context.Background(), s, newSnapshot.SHA256(), f.s, f.c); err != nil {
 		t.Fatal("legitimate replacement cannot be rebound")
 	}
 }
@@ -297,7 +462,7 @@ func TestProtectedPolicyRacedProviderRead(t *testing.T) {
 	for _, phase := range []Phase{Prebuild, Presign} {
 		t.Run(string(phase), func(t *testing.T) {
 			f, s, path, _ := installedFixture(t)
-			a, err := NewWithPolicySource(context.Background(), s, f.s, f.c)
+			a, err := NewWithPolicySource(context.Background(), s, f.p.SHA256, f.s, f.c)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -403,6 +568,9 @@ func TestProtectedPolicyEffectBoundaryReplacement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			oldDigest := e.f.p.SHA256
+			bindFixturePolicyBytes(e.f, b)
+			raw = bytes.ReplaceAll(raw, []byte(oldDigest), []byte(e.f.p.SHA256))
 			if err := os.WriteFile(path, b, 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -410,7 +578,7 @@ func TestProtectedPolicyEffectBoundaryReplacement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, err := NewEffectRunnerWithPolicySource(context.Background(), s, e.f.s, e.f.c, e.policy, effectBuilder{e}, effectSigner{e}, e)
+			r, err := NewEffectRunnerWithPolicySource(context.Background(), s, e.f.p.SHA256, e.f.s, e.f.c, e.policy, effectBuilder{e}, effectSigner{e}, e)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -470,7 +638,7 @@ func TestProtectedPolicyOriginalAbsoluteDeadline(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
 	defer cancel()
 	capture := &deadlinePolicySource{s: s}
-	a, err := NewWithPolicySource(ctx, capture, f.s, f.c)
+	a, err := NewWithPolicySource(ctx, capture, f.p.SHA256, f.s, f.c)
 	if err != nil {
 		t.Fatal(err)
 	}

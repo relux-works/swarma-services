@@ -66,10 +66,27 @@ func unique(values []string, maxBytes int) bool {
 	return true
 }
 func validPolicy(p Policy) bool {
-	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) || !lowerHex(p.SHA256, 64) || !ascii(p.MatrixOrigin, 255) || !text(p.ProducerSender, 255) {
+	return lowerHex(p.SHA256, 64) && validPolicyPayload(p, MatrixPolicyRoute)
+}
+
+func validPolicyPayload(p Policy, route PolicyRoute) bool {
+	if !ascii(p.Product, 128) || !ascii(p.Alias, 64) || !ascii(p.CanonicalRepository, 512) || !ascii(p.RepositoryName, 256) || !text(p.DefaultBranch, 255) {
 		return false
 	}
-	if len(p.Scopes) < 1 || len(p.Scopes) > MaxScopes || !unique(p.Scopes, 512) || len(p.ReviewerSenders) == 0 || !unique(p.ReviewerSenders, 255) || len(p.OwnerKeys) == 0 {
+	switch route {
+	case MatrixPolicyRoute:
+		if !ascii(p.MatrixOrigin, 255) || !text(p.ProducerSender, 255) || len(p.ReviewerSenders) == 0 || !unique(p.ReviewerSenders, 255) {
+			return false
+		}
+	case GitHubPRPolicyRoute:
+		// This route never borrows a partially configured Matrix authority.
+		if p.MatrixOrigin != "" || p.ProducerSender != "" || len(p.ReviewerSenders) != 0 {
+			return false
+		}
+	default:
+		return false
+	}
+	if len(p.Scopes) < 1 || len(p.Scopes) > MaxScopes || !unique(p.Scopes, 512) || len(p.OwnerKeys) == 0 {
 		return false
 	}
 	for _, k := range p.OwnerKeys {
