@@ -1,5 +1,7 @@
 package sourceauthority
 
+import "reflect"
+
 // Historical adapter membership metadata is not reviewer authority. GitHub
 // logins, account IDs and publishing permissions cannot replace ReviewerKeys.
 type GitHubMember struct {
@@ -26,14 +28,17 @@ type GitHubStoredVerdict struct {
 	StoredAt               int64
 }
 
-// NewGitHubPR validates the complete native configuration and refuses the
-// missing source-owned history capability. There is deliberately no caller flag,
-// journal or invented history-provider interface that can enable this route.
+// NewGitHubPR binds the explicit native route to the protected GraphQL source.
+// A generic caller-supplied Source cannot assert original-review integrity.
 func NewGitHubPR(policy Policy, source Source, clock Clock) (*Authority, error) {
 	if source == nil || clock == nil || ValidateGitHubPolicy(policy) != nil {
 		return nil, unavailable("configuration")
 	}
-	return nil, unavailable("github_original_history_unqualified")
+	s, ok := source.(*githubPRSource)
+	if !ok || s == nil || s.graphql == nil || !reflect.DeepEqual(copyPolicy(s.policy), copyPolicy(policy)) {
+		return nil, unavailable("github_provider_configuration")
+	}
+	return &Authority{policy: copyPolicy(policy), source: s, clock: clock, github: s}, nil
 }
 
 func verifyGitHubHandoff(o Observation, p Policy, _ GitHubPRMembership) error {

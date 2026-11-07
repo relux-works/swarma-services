@@ -29,14 +29,13 @@ refuses conflicting repeats, distinct copies, multiple signed originals,
 withdrawn originals and active blocking reviews. These primitives never establish
 history, platform acquisition, provider completeness or release authority.
 
-The sealed REST adapter has no complete original edit/revision, withdrawal or
-deleted-inventory history capability. Repeated current snapshots, current body,
-state, login and `intact` flags cannot supply it. Both GitHub authority and source
-constructors return `github_original_history_unqualified`; Source.Read also
-refuses before any provider callback. No enabling flag, synthetic history,
-provider interface, alternate journal or reviewer signature is supplied here.
-Consequently there is no successful GitHub BeforeBuild/BeforeSign path in this
-candidate. A future provider implementation needs a separate reviewed change.
+The protected GitHub source now requires raw GraphQL acquisition of the exact
+signed original at admission and immediately before the final effect. It
+accepts only explicit never-edited/never-withdrawn fields and exact record,
+account, PR, repository and body binding. REST alone and generic sources refuse.
+No complete edit-history provider or alternate journal is required. See
+[the composition status](sourceauthority-github-pr.md) for predicates, finite
+bounds and synthetic-only implementation qualification.
 
 The policy codec serializes actual native fields in CCJ-1. Runtime SHA256 is the
 hash of the complete exact canonical file and is excluded from its payload.

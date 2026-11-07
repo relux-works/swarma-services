@@ -156,6 +156,9 @@ func (s *AuditedSigner) bind(ctx context.Context, j *SignJob) (*auditBinding, er
 	if !bok || !sok || bs != br.Authority || ss != r.Authority || bs.Binding.Phase != Prebuild || ss.Binding.Phase != Presign || bs.Binding.Nonce == ss.Binding.Nonce {
 		return nil, signingaudit.ErrInvalid
 	}
+	if s.authority.github != nil && bs.PlatformReviewID != ss.PlatformReviewID {
+		return nil, signingaudit.ErrAuthority
+	}
 	if j.build.qualification.CheckFreshness() != nil || j.qualification.CheckFreshness() != nil {
 		return nil, signingaudit.ErrAuthority
 	}
@@ -249,7 +252,7 @@ func (s *AuditedSigner) binding(op signingaudit.Operation) (*auditBinding, error
 // current lease supplements both original caps; it never replaces either one.
 func (s *AuditedSigner) entry(ctx context.Context, phase signingaudit.Phase, op signingaudit.Operation) (*auditBinding, error) {
 	b, err := s.binding(op)
-	if err != nil || b.phase != phase || b.current.CheckFreshness() != nil || b.ctx.Err() != nil || ctx.Err() != nil {
+	if err != nil || b.phase != phase || b.current.checkFinalEffectContext(ctx) != nil || b.ctx.Err() != nil || ctx.Err() != nil {
 		return nil, signingaudit.ErrAuthority
 	}
 	return b, nil
@@ -287,6 +290,9 @@ func (t auditTrust) Check(ctx context.Context, phase signingaudit.Phase, op sign
 		return err
 	}
 	summary, _ := q.Summary()
+	if s.authority.github != nil && summary.PlatformReviewID != b.sign.summary.PlatformReviewID {
+		return signingaudit.ErrAuthority
+	}
 	if summary.Tree != op.Inputs.Tree {
 		return signingaudit.ErrAuthority
 	}

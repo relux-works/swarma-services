@@ -126,6 +126,7 @@ const (
 // substitute for the predicates independently checked below. Source retains
 // custody while Read returns, then transfers stable ownership to the verifier.
 type Observation struct {
+	githubProof           *githubReviewProof
 	Binding               Query
 	ObservedAt, ExpiresAt int64
 	PolicySHA256          string
@@ -173,6 +174,7 @@ type ReviewInventory struct {
 }
 
 type PlatformReview struct {
+	NodeID                                        string
 	AccountID                                     uint64
 	AccountLogin                                  string
 	Repository, ID, Head, Base, Kind, State, Body string
@@ -256,12 +258,16 @@ type Summary struct {
 // Qualification has immutable private state; the zero value is absent. It can
 // only be produced by a complete boundary refresh through the configured Source.
 type Qualification struct {
-	summary         Summary
-	clock           Clock
-	start           Reading
-	deadline        time.Duration
-	installed       PolicySource
-	installedDigest string
+	githubSource     *githubPRSource
+	githubProof      *githubReviewProof
+	originalContext  context.Context
+	originalDeadline time.Time
+	summary          Summary
+	clock            Clock
+	start            Reading
+	deadline         time.Duration
+	installed        PolicySource
+	installedDigest  string
 }
 
 func (q *Qualification) Summary() (Summary, bool) {
@@ -272,16 +278,18 @@ func (q *Qualification) Summary() (Summary, bool) {
 }
 
 // CheckFreshness checks the local lease and, for protected qualifications, the
-// current installed digest. It never refreshes provider evidence or establishes
-// another phase. BeforeSign must perform its OWN fresh Source read.
+// current installed digest. It does not establish another phase or reread
+// provider evidence; final effect gates perform the GitHub GraphQL reread.
+// BeforeSign must perform its OWN fresh Source read.
 // Monotonic capping prevents backward wall movement from extending the lease.
 func (q *Qualification) CheckFreshness() error {
 	return q.CheckFreshnessContext(context.Background())
 }
 
 // CheckFreshnessContext additionally rereads installed policy for protected
-// qualifications. Effects must supply the original job context. This does not
-// renew the qualification or replace BeforeSign's independent source read.
+// qualifications. Effects supply the original job context and additionally
+// invoke checkFinalEffectContext at entry for the GitHub GraphQL reread. This
+// neither renews a qualification nor replaces BeforeSign's source read.
 func (q *Qualification) CheckFreshnessContext(ctx context.Context) error {
 	if q == nil || q.clock == nil {
 		return unavailable("absent_qualification")
@@ -336,4 +344,43 @@ func (q *Qualification) leaseReading() (Reading, error) {
 		return Reading{}, unavailable("lease_clock")
 	}
 	return now, nil
+}
+
+// checkFinalEffectContext is called only at effect/backend entry. Original
+// qualifications keep their local lease checks; the current qualification's
+// GraphQL observation is acquired again directly before its effect.
+func (q *Qualification) checkFinalEffectContext(ctx context.Context) error {
+	if err := q.CheckFreshnessContext(ctx); err != nil {
+		return err
+	}
+	if q.githubSource != nil {
+		leading, err := q.leaseReading()
+		if err != nil {
+			return err
+		}
+		if q.originalContext == nil || acquisitionExpired(q.originalContext) || !time.Now().Before(q.originalDeadline) || ctx.Err() != nil {
+			return unavailable("authority_budget")
+		}
+		remaining := q.deadline - leading.end()
+		deadlineContext, deadlineCancel := context.WithDeadline(q.originalContext, q.originalDeadline)
+		defer deadlineCancel()
+		boundedContext, cancel := context.WithTimeout(deadlineContext, remaining)
+		defer cancel()
+		if err := checkInstalled(boundedContext, q.installed, q.installedDigest); err != nil {
+			return err
+		}
+		if q.githubProof == nil {
+			return unavailable("github_original_proof")
+		}
+		if err := q.githubSource.readOriginal(boundedContext, *q.githubProof); err != nil {
+			return err
+		}
+		final, err := q.leaseReading()
+		if err != nil || final.Monotonic < leading.end() || final.Wall.Before(leading.Wall) || acquisitionExpired(boundedContext) || ctx.Err() != nil {
+			return unavailable("lease_clock")
+		}
+		return nil
+	}
+
+	return nil
 }

@@ -218,7 +218,8 @@ func VerifyGitHubReviewRecord(p Policy, b GitHubReviewBinding, r PlatformReview)
 // BindGitHubReviewInventory selects only a unique cryptographically original
 // CURRENT record. This is a bounded local binding primitive, never qualification:
 // Complete here describes only the current inventory, not deleted-record,
-// revision, dismissal or withdrawal history. The GitHub constructor still refuses.
+// revision, dismissal or withdrawal history. GraphQL independently checks the
+// selected original at admission and immediately before each final effect.
 func BindGitHubReviewInventory(p Policy, b GitHubReviewBinding, inventory ReviewInventory) (PlatformReview, ReviewerVerdict, error) {
 	var selected PlatformReview
 	var verdict ReviewerVerdict

@@ -56,12 +56,11 @@ the payload and request, independent of reviewer-signature syntax.
 
 `NewProtectedPolicySourceForRoute` fixes the explicit route with path and UID.
 `NewProtectedPolicySource` selects the existing Matrix loader and cannot infer
-GitHub from empty identities. The protected Authority/effect constructors in
-this candidate admit the Matrix route only. A GitHub snapshot refuses with
-`github_original_history_unqualified`, before any provider read. Native
-ReviewerKeys, the exact repository scope and original-record signature binding
-are implemented, but the REST component cannot establish complete original
-edit/withdrawal/inventory history. No partial policy is installable.
+GitHub from empty identities. The protected Authority/effect constructors select the snapshot's explicit
+route. A GitHub snapshot requires the protected source with the GraphQL reader;
+generic sources and empty Matrix identities cannot enable or infer a route.
+ReviewerKeys, repository scope and original-record signatures remain mandatory.
+No partial policy is installable; external digest admission remains required.
 
 The trusted custodian constructs `NewProtectedPolicySource(ctx, absolutePath,
 expectedUID)` outside request handling. The file must be owned by exactly that
@@ -132,6 +131,6 @@ GitHub configuration now requires the exact canonical keyvault repository,
 ReviewerKeys. Existing Matrix policies preserve their omitted optional reviewer
 field. Both constructors and the codec check repository-bound public pins and
 producer/reviewer separation. ReviewerKeys is defensively deep copied.
-A complete encoded GitHub configuration remains non-installable pending admission;
-GitHub authority construction refuses `github_original_history_unqualified`
-because the REST component cannot prove complete original review history.
+A complete encoded GitHub configuration remains non-installable pending external
+digest admission. GraphQL original-review checks implement the narrowed first-run
+rule without changing policy bytes or adding a digest field to the payload.

@@ -12,6 +12,7 @@ import (
 // no cross-phase successful observation. Source and Clock implementations must
 // be concurrency safe if the eventual caller uses this component concurrently.
 type Authority struct {
+	github          *githubPRSource
 	policy          Policy
 	source          Source
 	clock           Clock
@@ -147,6 +148,7 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	if err != nil || !validReading(start) {
 		return nil, unavailable("clock")
 	}
+	originalContext := ctx
 	ctx, cancel := context.WithTimeout(ctx, AuthorityBudget)
 	defer cancel()
 	if ctx.Err() != nil {
@@ -204,10 +206,20 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 		return nil, rejected("pull_request")
 	}
 	producer := o.Producer
-	if o.GitHub != nil || producer.Origin != a.policy.MatrixOrigin || !text(producer.Scope, 512) || !text(producer.Event, 512) || producer.Sender != a.policy.ProducerSender || producer.Repository != a.policy.CanonicalRepository || producer.Head != c.oid || producer.PR != o.PR.Number || producer.State != "intact" {
+	if a.github != nil {
+		if err := verifyGitHubHandoff(o, a.policy, a.github.members); err != nil {
+			return nil, err
+		}
+	} else if o.GitHub != nil || producer.Origin != a.policy.MatrixOrigin || !text(producer.Scope, 512) || !text(producer.Event, 512) || producer.Sender != a.policy.ProducerSender || producer.Repository != a.policy.CanonicalRepository || producer.Head != c.oid || producer.PR != o.PR.Number || producer.State != "intact" {
 		return nil, rejected("producer_handoff")
 	}
-	review, digest, err := verifyReview(o, a.policy)
+	var review PlatformReview
+	var digest string
+	if a.github != nil {
+		review, digest, err = bindSourceGitHubReview(o, a.policy, a.github.members)
+	} else {
+		review, digest, err = verifyReview(o, a.policy)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +255,23 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 		return nil, unavailable("lease_clock")
 	}
 	summary := Summary{Binding: query, Tree: c.tree, OwnerFingerprint: owner, DefaultHead: o.Repository.DefaultHead, Relationship: relationship, PR: o.PR.Number, PlatformReviewID: review.ID, Verdict: "ACCEPT", VerdictBodySHA256: digest, CheckPolicyRef: o.CheckPolicy.Ref, CheckVerdict: checkVerdict, ObservedAt: o.ObservedAt, ExpiresAt: o.ExpiresAt}
-	return &Qualification{summary: summary, clock: a.clock, start: final, deadline: deadline, installed: a.installed, installedDigest: a.installedDigest}, nil
+	// Preserve the caller's original context and this admission's absolute wall
+	// deadline. A final provider read may shorten these bounds, never renew them.
+	var effectContext context.Context
+	var effectDeadline time.Time
+	if a.github != nil {
+		originalDeadline, ok := originalContext.Deadline()
+		if !ok {
+			return nil, unavailable("authority_budget")
+		}
+		phaseDeadline, _ := ctx.Deadline()
+		if originalDeadline.Before(phaseDeadline) {
+			phaseDeadline = originalDeadline
+		}
+		effectContext = originalContext
+		effectDeadline = phaseDeadline
+	}
+	return &Qualification{summary: summary, clock: a.clock, start: final, deadline: deadline, installed: a.installed, installedDigest: a.installedDigest, githubSource: a.github, githubProof: o.githubProof, originalContext: effectContext, originalDeadline: effectDeadline}, nil
 }
 
 func bounded(o Observation, p Profile) error {

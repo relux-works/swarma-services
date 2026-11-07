@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -45,13 +46,6 @@ type githubVerdictSelection struct {
 	ReviewID string
 	Verdicts GitHubVerdictInventory
 }
-type githubVerdictReader interface {
-	// Must establish UNIQUE original verdict provenance/integrity and selection
-	// for the exact PR and current complete native review inventory. Its production
-	// store and account/member admission are unresolved, never fixture defaults.
-	readVerdict(context.Context, Query, PullRequest, []PlatformReview) (githubVerdictSelection, error)
-}
-
 type githubPRSource struct {
 	policy    Policy
 	members   GitHubPRMembership
@@ -61,8 +55,9 @@ type githubPRSource struct {
 	policies  githubPolicyReader
 	git       githubGitReader
 	checks    githubCheckReader
-	verdicts  githubVerdictReader
+	graphql   githubGraphQLReader
 	busy      atomic.Bool
+	graphBusy atomic.Bool
 }
 
 type githubPRInstallation struct {
@@ -73,19 +68,25 @@ type githubPRInstallation struct {
 	policies githubPolicyReader
 	git      githubGitReader
 	checks   githubCheckReader
-	verdicts githubVerdictReader
+	graphql  githubGraphQLReader
 }
 
 // Production endpoints are fixed to the canonical public GitHub API. The only
 // alternate origin/roots are unexported test assembly of the existing transport.
 // This constructor does not install anything or assert policy admission.
-// newGitHubPRSource cannot admit the sealed REST-only adapter. No history
-// capability is asserted by configured callbacks or repeated current snapshots.
+// The GraphQL seam is mandatory. REST never asserts edit/withdrawal integrity.
 func newGitHubPRSource(c githubPRInstallation) (*githubPRSource, error) {
-	if ValidateGitHubPolicy(c.policy) != nil || c.number == 0 || c.number > 9223372036854775807 || c.clock == nil || c.policies == nil || c.git == nil || c.checks == nil || c.verdicts == nil {
+	if ValidateGitHubPolicy(c.policy) != nil || c.number == 0 || c.number > 9223372036854775807 || c.clock == nil || c.policies == nil || c.git == nil || c.checks == nil || c.graphql == nil || !validGitHubMembers(c.members) {
 		return nil, unavailable("github_configuration")
 	}
-	return nil, unavailable("github_original_history_unqualified")
+	root := "/repos/" + c.policy.RepositoryName + "/pulls/" + strconv.FormatUint(c.number, 10)
+	a, err := newSourceAcquisition(acquisitionInstallation{provider: "github-anonymous-pr", origin: "https://api.github.com", limits: acquisitionLimits{header: acquisitionHeaderMax, metadata: acquisitionBodyMax, commit: acquisitionCommitMax, aggregate: acquisitionAggregateMax, responses: acquisitionResponsesMax}, endpoints: map[string]acquisitionEndpoint{"pr": {path: root, kind: metadataResponse}, "reviews": {path: root + "/reviews", kind: metadataResponse}}})
+	if err != nil {
+		return nil, err
+	}
+	m := c.members
+	m.Reviewers = append([]GitHubMember(nil), m.Reviewers...)
+	return &githubPRSource{policy: copyPolicy(c.policy), members: m, number: c.number, transport: a, clock: c.clock, policies: c.policies, git: c.git, checks: c.checks, graphql: c.graphql}, nil
 }
 
 func githubRepoName(s string) bool {
@@ -136,6 +137,7 @@ type nativeGitHubPR struct {
 }
 type nativeGitHubReview struct {
 	ID        uint64           `json:"id"`
+	NodeID    string           `json:"node_id"`
 	Commit    string           `json:"commit_id"`
 	State     string           `json:"state"`
 	Body      string           `json:"body"`
@@ -202,15 +204,125 @@ func (s *githubPRSource) readNative(p *acquisitionPhase) (PullRequest, GitHubMem
 		}
 		// Base is correlated here only. platformDigest and the ORIGINAL stored
 		// verdict independently bind the historical base before core acceptance.
-		records = append(records, PlatformReview{Repository: pr.Repository, ID: strconv.FormatUint(r.ID, 10), Head: r.Commit, Base: pr.Base, PR: pr.Number, Kind: kind, State: state, Body: r.Body, SubmittedAt: r.Submitted.Unix(), AccountID: r.User.ID, AccountLogin: r.User.Login})
+		records = append(records, PlatformReview{Repository: pr.Repository, ID: strconv.FormatUint(r.ID, 10), Head: r.Commit, Base: pr.Base, PR: pr.Number, Kind: kind, State: state, Body: r.Body, SubmittedAt: r.Submitted.Unix(), AccountID: r.User.ID, AccountLogin: r.User.Login, NodeID: r.NodeID})
 	}
 	return pr, producer, records, a.body, b.body, nil
 }
 
-func (s *githubPRSource) Read(ctx context.Context, q Query) (Observation, error) {
-	// Even a same-package manually assembled source cannot turn current REST
-	// bodies or synthetic verdict flags into proof of complete original history.
-	return Observation{}, unavailable("github_original_history_unqualified")
+func (s *githubPRSource) Read(ctx context.Context, q Query) (out Observation, err error) {
+	if s == nil || ctx == nil || !validRequest(q.Request, s.policy) || q.Phase != Prebuild && q.Phase != Presign {
+		return out, rejected("request_binding")
+	}
+	if !s.busy.CompareAndSwap(false, true) {
+		return out, unavailable("github_busy")
+	}
+	defer s.busy.Store(false)
+	// An Authority supplies this absolute deadline. Direct calls cannot start an
+	// unbounded acquisition or reset the enclosing phase's budget.
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > AuthorityBudget {
+		return out, unavailable("authority_budget")
+	}
+	start, err := s.clock.Read()
+	if err != nil || !validReading(start) {
+		return out, unavailable("clock")
+	}
+	policy, err := s.policies.readCurrent(ctx)
+	if err != nil || policy.Digest != s.policy.SHA256 || policy.State != Current || !text(policy.Generation, 256) || !reflect.DeepEqual(policy.Members, s.members) {
+		return out, unavailable("github_policy")
+	}
+	policy.Members.Reviewers = append([]GitHubMember(nil), policy.Members.Reviewers...)
+	phase, err := s.transport.begin(ctx, acquisitionAggregateMax, acquisitionResponsesMax)
+	if err != nil {
+		return out, err
+	}
+	defer phase.close()
+	pr, producer, reviews, prBytes, reviewBytes, err := s.readNative(phase)
+	if err != nil {
+		return out, err
+	}
+	if pr.Head != q.Commit {
+		return out, rejected("github_changed_head")
+	}
+	git, err := s.git.readGit(ctx, q)
+	if err != nil {
+		return out, unavailable("github_git")
+	}
+	if err := bounded(Observation{Commit: git.Commit, LandingPath: git.LandingPath}, s.policy.Profile); err != nil {
+		return out, err
+	}
+	git = ownGitHubGit(git)
+	checks, err := s.checks.readChecks(ctx, q)
+	if err != nil {
+		return out, unavailable("github_checks")
+	}
+	if len(checks.Policy.Required) > s.policy.Profile.CheckRecords || len(checks.Inventory.Records) > s.policy.Profile.CheckRecords {
+		return out, unavailable("profile_capacity")
+	}
+	checks.Policy.Required = append([]CheckIdentity(nil), checks.Policy.Required...)
+	checks.Inventory.Records = append([]CheckRecord(nil), checks.Inventory.Records...)
+	inv := ReviewInventory{Coverage: Complete, Records: reviews}
+	binding := GitHubReviewBinding{Repository: pr.Repository, BaseBranch: pr.BaseBranch, Head: pr.Head, Base: pr.Base, PR: pr.Number}
+	selected, _, err := BindGitHubReviewInventory(s.policy, binding, inv)
+	if err != nil {
+		return out, err
+	}
+	selection := githubVerdictSelection{ReviewID: selected.ID}
+	var reviewer GitHubMember
+	for _, m := range s.members.Reviewers {
+		if m.ID == selected.AccountID && m.Login == selected.AccountLogin {
+			reviewer = m
+		}
+	}
+	if reviewer.ID == 0 {
+		return out, rejected("github_reviewer_account")
+	}
+	id, _ := strconv.ParseUint(selected.ID, 10, 63)
+	binding.ReviewID = id
+	proof := githubReviewProof{binding: binding, account: reviewer, body: selected.Body, nodeID: selected.NodeID}
+	if err := s.readOriginal(ctx, proof); err != nil {
+		return out, err
+	}
+	o := Observation{Binding: q, ObservedAt: start.Wall.Unix(), ExpiresAt: start.Wall.Unix() + 300, PolicySHA256: policy.Digest, PolicyState: policy.State, Repository: git.Repository, Commit: git.Commit, LandingPath: git.LandingPath, PR: pr, GitHub: &GitHubHandoff{Repository: pr.Repository, Head: pr.Head, Base: pr.Base, Number: pr.Number, Producer: producer, Reviewer: reviewer, Verdicts: selection.Verdicts}, Reviews: ReviewInventory{Coverage: Complete, SelectedID: selection.ReviewID, Records: reviews}, CheckPolicy: checks.Policy, Checks: checks.Inventory}
+	if err := bounded(o, s.policy.Profile); err != nil {
+		return out, err
+	}
+	if err := verifyGitHubHandoff(o, s.policy, s.members); err != nil {
+		return out, err
+	}
+	if _, _, err := bindSourceGitHubReview(o, s.policy, s.members); err != nil {
+		return out, err
+	}
+	if _, err := verifyChecks(o, s.policy); err != nil {
+		return out, err
+	}
+	// Current metadata, reviews, default head, rules/attempts and installed policy
+	// are acquired AGAIN, not assumed stable from an earlier successful phase.
+	_, _, _, prEnd, reviewEnd, err := s.readNative(phase)
+	if err != nil {
+		return out, err
+	}
+	gitEnd, err := s.git.readGit(ctx, q)
+	if err != nil || !reflect.DeepEqual(git, gitEnd) {
+		return out, unavailable("github_git_changed")
+	}
+	checkEnd, err := s.checks.readChecks(ctx, q)
+	if err != nil || !reflect.DeepEqual(checks, checkEnd) {
+		return out, unavailable("github_checks_changed")
+	}
+	policyEnd, err := s.policies.readCurrent(ctx)
+	if err != nil || !reflect.DeepEqual(policyEnd, policy) {
+		return out, unavailable("github_policy_changed")
+	}
+	final, err := s.clock.Read()
+	if err != nil || !validReading(final) || final.Epoch != start.Epoch || final.Monotonic < start.end() || final.Wall.Before(start.Wall) || final.end()-start.Monotonic >= AuthorityBudget || final.wallEnd().Unix() >= o.ExpiresAt || ctx.Err() != nil {
+		return out, unavailable("authority_budget")
+	}
+	if !bytes.Equal(prBytes, prEnd) || !bytes.Equal(reviewBytes, reviewEnd) {
+		return out, rejected("github_snapshot_changed")
+	}
+	o.githubProof = &proof
+	return o, nil
 }
 
 // All JSON is bounded by the transport before parsing. Check encoding, decoded
@@ -240,6 +352,9 @@ func strictGitHubJSON(raw []byte, out any) error {
 	return nil
 }
 func walkGitHubJSON(d *json.Decoder, depth, rootLimit int) error {
+	return walkProviderJSON(d, depth, rootLimit, false)
+}
+func walkProviderJSON(d *json.Decoder, depth, rootLimit int, graphql bool) error {
 	if depth > 64 {
 		return unavailable("github_json_depth")
 	}
@@ -263,11 +378,11 @@ func walkGitHubJSON(d *json.Decoder, depth, rootLimit int) error {
 				return unavailable("github_json")
 			}
 			key, ok := k.(string)
-			if !ok || seen[key] || strings.ToLower(key) != key {
+			if !ok || seen[key] || !graphql && strings.ToLower(key) != key || graphql && !graphQLField(key) {
 				return unavailable("github_json_duplicate")
 			}
 			seen[key] = true
-			if err := walkGitHubJSON(d, depth+1, rootLimit); err != nil {
+			if err := walkProviderJSON(d, depth+1, rootLimit, graphql); err != nil {
 				return err
 			}
 		}
@@ -285,7 +400,7 @@ func walkGitHubJSON(d *json.Decoder, depth, rootLimit int) error {
 				return unavailable("github_json_capacity")
 			}
 			count++
-			if err := walkGitHubJSON(d, depth+1, rootLimit); err != nil {
+			if err := walkProviderJSON(d, depth+1, rootLimit, graphql); err != nil {
 				return err
 			}
 		}

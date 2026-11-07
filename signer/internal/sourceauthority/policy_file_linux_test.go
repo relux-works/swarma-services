@@ -245,7 +245,7 @@ func TestProtectedPolicyExplicitRouteGuards(t *testing.T) {
 	// these bytes may be inspected but cannot fall through the Matrix authority.
 	a, err := NewWithPolicySource(context.Background(), s, p.SHA256, f.s, f.c)
 	var refusal *Refusal
-	if a != nil || !errors.As(err, &refusal) || refusal.Predicate() != "github_original_history_unqualified" || len(f.s.queries) != 0 {
+	if a != nil || !errors.As(err, &refusal) || refusal.Predicate() != "github_provider_configuration" || len(f.s.queries) != 0 {
 		t.Fatalf("unbound GitHub route reached Matrix authority: %v", err)
 	}
 }

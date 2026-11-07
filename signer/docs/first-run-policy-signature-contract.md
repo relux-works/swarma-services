@@ -143,10 +143,9 @@ neither a future submission time nor the signature's own bytes are signed.
 
 These operations are documented in the [GitHub review REST API](https://docs.github.com/en/rest/pulls/reviews).
 The [PullRequestReview GraphQL fields](https://docs.github.com/en/graphql/reference/pulls#pullrequestreview)
-include current state, submittedAt, lastEditedAt and userContentEdits. They are
-possible integrity inputs, not proof that the sealed adapter already exposes
-complete history. Provider permissions, retained revisions and pagination must
-actually support the following requirements. REST current body alone does not.
+support the narrowed first-run rule below. Complete edit or withdrawal history
+is not required. REST supplies current PR and bounded inventory correlation;
+it cannot assert integrity facts that GraphQL has not proved.
 
 ## Selection, withdrawal and republication
 
@@ -161,26 +160,29 @@ when the actual containing record's ID equals signed R. Signature verification
 alone is not selection. Preserve R in the phase qualification/summary and require
 the same original delivery across the operation's phase/effect bindings.
 
-At every BeforeBuild and BeforeSign read, independently fetch R by actual
-platform identity and cross-check the
-complete current inventory. Require its repository/PR/head, signed B and scope
-to match the current exact tuple. Require original submitted C intact, current
-active COMMENT state, no dismissal/withdrawal and no post-submission body edit.
-Use authenticated platform state and retained revision/dismissal evidence, not
-a release caller's asserted `intact`/`active` flag. Pre-submission initialization
-is permitted only by the pending-to-submitted flow above; any later edit,
-including edit-and-restore, refuses. A lastEditedAt timestamp alone does not
-prove a complete edit history or distinguish tied timestamps. Missing revision
-content, deleted revision content, permission-redacted history, ambiguous ordering,
-unsupported history or inability to establish completeness is unavailable.
-If a provider cannot supply the evidence, this route remains unqualified until
-the trusted acquisition path can; no synthetic history or second journal fills it.
+At admission in every BeforeBuild and BeforeSign read, acquire the exact
+original review R through GraphQL. Acquire it again immediately before each
+final effect through the source-bound final effect gate. Both reads require:
 
-Dismissal or other withdrawal of R invalidates that signed delivery. Never
-reactivate it based only on a later active-looking snapshot after a recorded
-withdrawal; unavailable withdrawal history refuses. A deleted/missing R, failed
-direct lookup, absent R in the complete inventory, or inconsistent identities
-refuses. Do not use a cached body/signature to fill a missing original record.
+- state exactly COMMENTED and commit.oid equal to exact H;
+- author login and account ID equal to the protected reviewer account pin;
+- lastEditedAt explicitly null, includesCreatedEdit explicitly false;
+- userContentEdits.totalCount explicitly 0, no nodes and no pagination;
+- isMinimized explicitly false and body bytes exactly equal to signed C;
+- exact node identity, original numeric R, repository, PR, head, base and branch;
+- a submitted timestamp, complete response and no GraphQL errors/null nodes.
+
+Any edit (including edit-and-restore), minimization, dismissal, deletion,
+missing review, read error, partial or paginated response refuses. Omitted
+booleans, counts, nullable fields or page metadata refuse; missing is never
+treated as false, zero or null. No history is reconstructed and no journal is
+added. An account pin cannot replace SSHSIG verification. The signed original
+ID stays fixed across build, presign and audited backend phase refreshes.
+
+The second read retains the original job context, original admission's absolute
+phase deadline, installed policy digest and original lease caps. It neither
+renews a lease, resigns a verdict nor widens a transport bound. Native audit
+entry checks continue to clear prior refresh success before fallible clock work.
 
 If a producer copies C into new record R2, its signed selector still names R.
 R2 cannot qualify, whether R is active, dismissed, edited, deleted or unavailable.
@@ -198,11 +200,10 @@ after exact field equality; conflicting repeats are unavailable. Distinct review
 IDs are distinct records even with identical bodies. Multiple copies of C or
 multiple qualifying originals in current inventory refuse ambiguity; an unsigned
 or invalid review never supplies a selector. Active CHANGES_REQUESTED anywhere
-in the effective exact-PR inventory still blocks. No rule requires reconstructing
-an unbounded global account history: inspect this PR's bounded inventory plus the
-selected original's complete integrity/withdrawal history. Do not claim that
-current inventory proves the absence of previously deleted records. Missing
-history affecting that proof or selected-original integrity is unavailable.
+in the effective exact-PR inventory still blocks. Inspect the bounded current
+inventory and require the selected original's two GraphQL never-edited,
+never-withdrawn checks. Do not infer historical inventory or invent a provider
+capability from current REST state.
 
 ## Constructor-bound route and producer gates
 
@@ -261,13 +262,14 @@ common pin validation/copying; their presence cannot replace Matrix identity.
 
 BeforeBuild and BeforeSign independently reread installed policy, repository,
 actual PR tuple/provenance, original delivery R, complete effective review
-inventory/history, required-check rules and check inventory. Preserve existing
+inventory, GraphQL integrity fields, required-check rules and check inventory. Preserve existing
 clock/lease/effect freshness, producer signatures, nonce/operation binding and
 nonrewriting landing gates. Changed route/policy/repository/PR/head/base/scope,
 withdrawn review or unavailable provider state refuses before effects.
-CheckFreshness remains the existing local clock/lease check, not a provider
-reread or revocation check. Each effect must consume its own phase's current
-qualification and pass that check; never substitute the build qualification for
+On the GitHub route the final effect gate additionally rereads the exact
+original through GraphQL under the retained context/deadlines. Local
+CheckFreshnessContext remains a clock/lease/installed-policy check on both routes. Each effect consumes its
+own phase's current qualification and passes the final check; never substitute the build qualification for
 the independent sign read. The trusted operation compares original R across
 phases using the existing summary/bindings, without adding a caller selector,
 new request format or persistent authority journal. A detected intervening
@@ -283,26 +285,23 @@ never recurse. Scope is the fixed accepted ASCII string. The policy remains at
 most 65536 bytes, CCJ-1 depth 16, commit bytes 1048576, ancestry 256, reviews 256
 and check records 256. Review aggregate bytes stay at most 16 MiB.
 
-Bound PR review inventory and selected-original history together: at most 256
-normalized review/revision/withdrawal records in total, at most 16 MiB aggregate
-raw body/history bytes, and at most 32 provider pages/requests including direct
-identity and integrity reads per phase. Apply stricter existing adapter caps
-where present; do not enlarge them. Overflow, absent pages/cursors, partial
-coverage, redaction or unknown semantics is unavailable. A truncated response
-is not an empty history. All reads, parsing and cryptography share the existing
-30-second phase budget and maximum 300-second observation lease. A provider
-cannot claim an atomic snapshot: cross-check selected identity/state within
-each phase's read, and refuse detected races or expired observations before
-effects. Local freshness does not establish a later provider frontier.
+The current REST inventory uses the stricter existing adapter cap: a full
+default page of 30 reviews refuses, and no pagination is followed. The policy
+still caps normalized inventory at 256 and aggregate bodies at 16 MiB. Each
+GraphQL read requests one original node and userContentEdits(first: 1), with a
+24576-byte body ceiling, existing 65536-byte header reservation, zero edit
+nodes, explicit null cursors and explicit false pagination flags. There is no
+complete-history/revision acquisition requirement. Partial, overflow or
+incomplete data refuses. Transport limits are not widened. All acquisition,
+parsing and cryptography retain the 30-second phase and 300-second lease caps.
 
-The existing sourceauthority Git framing primitives may be reused with explicit
-role/domain selection; the inspected verifyOwner itself verifies only Git
-commits. The core implementer owns constructor/producer gates, ReviewerKeys,
-signed-original selection, history capability checks and paired implementation
-tests. The sealed PR adapter and protected loader are separate components;
-this revision changes neither and does not claim they supply new provenance or
-history fields. If their interfaces omit required evidence, report the pairing
-gap and refuse qualification until a separately reviewed compatible change.
+The core composes constructor/producer gates, ReviewerKeys, signed-original
+selection, the raw GraphQL reader seam and the final effect reread. The source
+and protected loader now admit only that explicit composition. A production
+reader must actually acquire the fixed query from the canonical provider with
+authenticated, bounded data; the interface does not qualify any live provider.
+In-memory signed controls and synthetic TLS inventory tests establish the
+implementation behavior only. No platform mutation or native effect is run.
 
 The loader preserves the accepted nonrecursive digest mapping: omit SHA256 from
 serialized bytes, hash the exact complete canonical file, compare with the
@@ -329,8 +328,8 @@ using an independently obtained reviewer signature and actual supported evidence
 | Original preallocated R, reviewer-bound V, intact active submitted C | Dismiss R; same V/signature refuses |
 | That original R before dismissal | Dismiss R, repost byte-identical C at R2; R2 refuses and R remains withdrawn |
 | V naming actual R in R | Copy C to R2 while R is active; distinct-ID duplicate refuses; changing R to R2 invalidates signature |
-| Complete selected-original integrity history | Edit, edit-and-restore, delete R, missing direct R, redacted/deleted revision, missing history or conflicting repeated ID refuses |
-| One authenticated original for the exact tuple | Multiple authenticated originals or partial/overflow inventory/history refuses; no latest-active fallback |
+| Two complete GraphQL reads of the same never-edited original | Edit, edit-and-restore, minimization, dismissal, delete R, missing R/fields, read error or partial/paginated data refuses |
+| One authenticated original for the exact tuple | Multiple authenticated originals or partial/overflow inventory/GraphQL data refuses; no latest-active fallback |
 | Pending allocation, independent read, signature, submit SAME R | Pending/placeholder body, producer-chosen unverified ID, changed tuple before submit, guessed replacement or circular future-ID signing refuses |
 | Distinct admitted reviewer pin in swarma-source-review | Reviewer pin equal to any producer pin fails load; unsigned, producer-key, unpinned or git-namespace verdict refuses |
 | Producer Git commit signed in git | Same commit signed in swarma-source-review refuses |
@@ -338,7 +337,7 @@ using an independently obtained reviewer signature and actual supported evidence
 | Explicit GitHub route with intentional empty Matrix fields | Unset/unknown route, caller route switch or mixed-route policy refuses |
 | Existing valid Matrix policy/handoff/verdict path | Unset Matrix fields or substitution of GitHub signature evidence refuses |
 | Constructor-owned immutable key copies | Mutate caller ReviewerKeys outer slice or nested PublicKey after New; admitted policy remains unchanged |
-| Fresh policy/provenance/R/inventory/checks at both phases and local effect freshness | Detected withdrawal/change/unavailable state at a phase read, changed original R, or expiry at the effect boundary refuses |
+| Fresh policy/provenance/R/inventory/checks at both phases and final GraphQL effect reread | Detected withdrawal/change/unavailable state at a phase read, changed original R, or expiry at the effect boundary refuses |
 
 This contract revision needs fresh independent exact-head review and a new
 marker. It authorizes no actual platform review, reviewer signature generation, owner-key

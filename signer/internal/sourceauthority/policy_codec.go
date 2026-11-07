@@ -46,16 +46,7 @@ func NewWithPolicySource(ctx context.Context, installed PolicySource, expectedSH
 	if s.SHA256() != expectedSHA256 {
 		return nil, rejected("policy_admission_digest")
 	}
-	// The sealed GitHub adapter cannot prove complete original review history.
-	// Its route is explicit and remains unavailable; empty Matrix fields never
-	// select it and current REST body/state cannot enable it.
-	if s.route == GitHubPRPolicyRoute {
-		return nil, unavailable("github_original_history_unqualified")
-	}
-	if s.route != MatrixPolicyRoute {
-		return nil, unavailable("policy_route")
-	}
-	a, err := New(s.PolicyCopy(), source, clock)
+	a, err := NewForRoute(s.PolicyCopy(), s.route, source, clock)
 	if err != nil {
 		return nil, err
 	}

@@ -1,31 +1,36 @@
 # GitHub PR composition status
 
-Status: **UNQUALIFIED**. The native policy codec and original-review signature
-binding are composed with the protected loader, finite transport and audited
-signer. There is no production history provider and no usable GitHub authority.
+The explicit GitHub route composes native policy, signed original review
+binding, bounded REST inventory correlation, and a mandatory protected GraphQL
+acquisition seam. The former unconditional history refusal is removed. The
+constructor rejects a generic Source or a source without the GraphQL reader.
 
-The acquisition component can decode current PR/review REST fields under finite
-transport bounds. It now retains the actual head repository and base ref rather
-than relabeling fork provenance. These current reads cannot establish complete
-post-submission edits (including edit-and-restore), retained revision content,
-withdrawal/dismissal history, deleted-original inventory or history completeness.
-Its verdict reader is an unresolved component seam, not an implemented provider.
-The sealed source constructor and Read entry point therefore explicitly refuse
-with `github_original_history_unqualified` before provider operations.
+The source discovers exactly one signed original in the bounded current PR
+inventory. The actual containing numeric ID must equal the original ID signed
+in the verdict. Copies/reposts, conflicting repeated IDs, multiple originals
+and active blocking reviews refuse. ReviewerKeys (1..4) remain distinct from
+producer keys; SSHSIG namespace is exactly swarma-source-review. Protected
+account pins supply correlation only, never signature authority.
 
-The original review ID is authenticated in V and bound to the actual containing
-record. Repository, PR, head, base and accepted scope are exact. Posting accounts
-supply no reviewer authority; ReviewerKeys is distinct from producer OwnerKeys.
-Current inventory binding refuses copies, conflicting repeated IDs, multiple
-originals and active blocking reviews. These controls cannot prove past history.
+The original is read through GraphQL at admission and again immediately before
+each final effect. Only COMMENTED, exact head/account/body, lastEditedAt null,
+includesCreatedEdit false, userContentEdits.totalCount 0 and isMinimized false
+pass. Explicit field presence, exact node/numeric ID, repository/PR/base/branch,
+submission and complete unpaginated data are required. Errors, null nodes,
+partial data, omissions, edits, minimization, dismissal and deletion refuse.
+REST cannot supply missing GraphQL proof. No history or journal is fabricated.
 
-Owner disposition needed: provide a separately reviewed trusted acquisition path
-that honestly supports the complete original record edit/withdrawal/inventory
-history under the corrected contract, or explicitly disposition the first run
-as blocked. Ordinary REST current-body/state reads do not satisfy the contract.
-A future pending-review mutation and reviewer signing require their own admission.
-No policy install, first run, public publication or activation occurs here.
+The GraphQL reader receives a fixed query, exact node ID, one-response limit,
+24576-byte body limit and existing 65536-byte header reservation. It must enforce
+bounds before returning and honor the inherited deadline. The final read is
+capped by the original admission phase deadline and original current lease;
+original job cancellation remains binding. Existing transport and audit bounds
+remain unchanged. Final freshness is checked at the existing effect and audited
+backend entry gates. Original R cannot change across phases.
 
-Fresh independent review of the whole composed head and a new admission marker
-are required; component reviews and markers do not transfer. Exact policy bytes
-and their external SHA256 require separate owner acceptance before installation.
+Tests use synthetic TLS REST and in-memory signed GraphQL controls only. No
+live qualified provider, GitHub mutation, reviewer key custody, policy install,
+native run or first run is claimed. A real provider installation still needs
+qualified acquisition and its existing external policy admission. The native
+policy payload is unchanged. Fresh independent whole-composition review and
+an admission marker remain required.

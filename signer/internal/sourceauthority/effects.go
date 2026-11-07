@@ -240,7 +240,7 @@ func (r *EffectRunner) Run(ctx context.Context, body *manifestbody.UnqualifiedOp
 	if ctx.Err() != nil {
 		return unavailable("job_deadline")
 	}
-	if err = qualification.CheckFreshnessContext(ctx); err != nil {
+	if err = qualification.checkFinalEffectContext(ctx); err != nil {
 		return err
 	}
 	snapshot, err := r.builder.Build(ctx, job)
@@ -276,6 +276,9 @@ func (r *EffectRunner) Run(ctx context.Context, body *manifestbody.UnqualifiedOp
 		return err
 	}
 	summary, _ = qualification.Summary()
+	if r.authority.github != nil && summary.PlatformReviewID != record.Authority.PlatformReviewID {
+		return rejected("github_original_changed")
+	}
 	if summary.Tree != m.Tree {
 		return rejected("effect_tree_binding")
 	}
@@ -288,7 +291,7 @@ func (r *EffectRunner) Run(ctx context.Context, body *manifestbody.UnqualifiedOp
 	if ctx.Err() != nil {
 		return unavailable("job_deadline")
 	}
-	if err = qualification.CheckFreshnessContext(ctx); err != nil {
+	if err = qualification.checkFinalEffectContext(ctx); err != nil {
 		return err
 	}
 	if err = r.signer.Sign(ctx, &SignJob{build: job, snapshot: snapshot, record: record, qualification: qualification}); err != nil {

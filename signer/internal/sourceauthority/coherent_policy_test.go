@@ -109,18 +109,17 @@ func TestCurrentInventoryCannotReinstateOrSelectCopies(t *testing.T) {
 		})
 	}
 }
-func TestGitHubHistoryGapCannotBeEnabledByCurrentRecord(t *testing.T) {
+func TestGitHubRequiresProtectedGraphQLSource(t *testing.T) {
 	l := newReviewLab(t)
 	r := originalLabRecord(t, l)
 	requireOriginal(t, l, r)
 	f := validFixture(t)
-	// Even an exact restored body has a valid signature. That does not prove no
-	// edit-and-restore, deleted review, redaction or earlier withdrawal occurred.
+	// A generic source and valid signed body do not supply the two GraphQL reads.
 	for _, phase := range []Phase{Prebuild, Presign} {
 		_ = phase
 		a, err := NewGitHubPR(l.p, f.s, f.c)
 		var refusal *Refusal
-		if a != nil || !errors.As(err, &refusal) || refusal.Predicate() != "github_original_history_unqualified" {
+		if a != nil || !errors.As(err, &refusal) || refusal.Predicate() != "github_provider_configuration" {
 			t.Fatal("history gap hidden", err)
 		}
 	}
@@ -128,7 +127,7 @@ func TestGitHubHistoryGapCannotBeEnabledByCurrentRecord(t *testing.T) {
 		t.Fatal("unqualified constructor acquired source")
 	}
 	s := &githubPRSource{}
-	if _, err := s.Read(context.Background(), Query{}); !errors.Is(err, ErrUnavailable) {
+	if _, err := s.Read(context.Background(), Query{}); err == nil {
 		t.Fatal("manual source bypass")
 	}
 	if _, err := NewForRoute(l.p, "", f.s, f.c); err == nil {
