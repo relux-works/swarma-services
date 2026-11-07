@@ -50,6 +50,14 @@ preserves the original job and stream deadlines and the separate result-authenti
 host-custody, native signature and durable audit gates. This component does not
 implement a builder exchange, signing service or durable native artifact staging.
 
+`internal/sourceauthority.NewEffectRunner` supplies a
+[source composition at build/sign boundaries](docs/sourceauthority-effects.md):
+fresh service nonces and separate source reads, fixed endpoint checks, exact
+job/manifest correlation and neutral pre-effect audit records. Its trusted
+effect adapters have no production implementation. Source controls do not admit
+policy, peers, native builders, signing or durable operation recovery; the
+existing native readiness refusal remains unchanged.
+
 The public decoder admits at most 1,048,576 actual BODY bytes. Entries are nonempty and at most 8,192; receipt
 records are at most 512; regular files are at most 64 MiB and their checked sum at most 1 GiB. Decoded entry paths,
 link targets and module paths are bounded at 1,024 UTF-8 bytes; module versions at 128 ASCII bytes. Source symlink

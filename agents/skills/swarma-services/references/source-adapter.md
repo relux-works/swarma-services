@@ -29,7 +29,7 @@ GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOWORK=off \
   timeout 120s go -C signer run -mod=readonly ./examples/source-adapter
 ```
 
-Go's compilation writes only the sandbox's private build/cache state. This example and its imported package use only the standard library; no module download or dependency upgrade is required. Reading the skill does not request execution. Do not run the native durability runner as an example.
+Go's compilation writes only the sandbox's private build/cache state. The source-authority package now also imports the existing BODY decoder through its effect-boundary composition; its transitive dependencies include the module's pinned `golang.org/x/mod` and `golang.org/x/text`. Supply those exact public artifacts with both canonical h1 domains verified in the private sandbox before this offline command; no dependency upgrade is required. Reading the skill does not request execution. Do not run the native durability runner as an example.
 
 Exit 0 prints:
 
