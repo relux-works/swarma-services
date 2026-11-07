@@ -70,6 +70,8 @@ jobs:
           done < "$state/go-modules"
           printf 'offline:x:%s:%s:offline:/work/home:/bin/sh\n' "$(id -u)" "$(id -g)" > "$state/etc/passwd"
           printf 'offline:x:%s:\n' "$(id -g)" > "$state/etc/group"
+          # Keep synthetic TLS authorities on the isolated loopback interface.
+          printf '127.0.0.1 localhost\n::1 localhost\n127.0.0.1 example.com\n' > "$state/etc/hosts"
           # Fail closed if namespaces are unavailable. No host home, identity
           # database, keys, agent socket, foreign cache or network is mounted.
           timeout --signal=TERM --kill-after=10s 900s \
@@ -82,6 +84,7 @@ jobs:
             --bind "$state/cache" /work/cache --ro-bind "$state/modcache" /work/modcache \
             --ro-bind "$state/go-modules" /work/go-modules \
             --ro-bind "$state/etc/passwd" /etc/passwd --ro-bind "$state/etc/group" /etc/group \
+            --ro-bind "$state/etc/hosts" /etc/hosts \
             --proc /proc --dev /dev --chdir /source \
             --setenv PATH /toolchain/bin:/usr/bin:/bin --setenv GOROOT /toolchain \
             --setenv HOME /work/home --setenv TMPDIR /work/tmp \
