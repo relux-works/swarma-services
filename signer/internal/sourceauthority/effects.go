@@ -108,6 +108,22 @@ func NewEffectRunner(p Policy, source Source, clock Clock, effects EffectPolicy,
 	if err != nil {
 		return nil, err
 	}
+	return newEffectRunner(a, effects, builder, signer, audit)
+}
+
+// NewEffectRunnerWithPolicySource selects the protected installed-policy route
+// at construction. Both phases and their final freshness checks use the same
+// fixed installation path and bound full-file digest; a reinstall requires a
+// newly constructed runner. No runtime or production adapter is installed here.
+func NewEffectRunnerWithPolicySource(ctx context.Context, installed PolicySource, source Source, clock Clock, effects EffectPolicy, builder BuilderEffect, signer SignerEffect, audit BoundaryAudit) (*EffectRunner, error) {
+	a, err := NewWithPolicySource(ctx, installed, source, clock)
+	if err != nil {
+		return nil, err
+	}
+	return newEffectRunner(a, effects, builder, signer, audit)
+}
+
+func newEffectRunner(a *Authority, effects EffectPolicy, builder BuilderEffect, signer SignerEffect, audit BoundaryAudit) (*EffectRunner, error) {
 	if !lowerHex(effects.RecipeSHA256, 64) || !lowerHex(effects.ToolchainSHA256, 64) || effects.Target != "darwin/arm64" || !text(effects.BuilderPeer, 256) || !text(effects.SignerPeer, 256) || effects.BuilderPeer == effects.SignerPeer || builder == nil || signer == nil || audit == nil {
 		return nil, unavailable("effect_configuration")
 	}
@@ -220,7 +236,7 @@ func (r *EffectRunner) Run(ctx context.Context, body *manifestbody.UnqualifiedOp
 	if ctx.Err() != nil {
 		return unavailable("job_deadline")
 	}
-	if err = qualification.CheckFreshness(); err != nil {
+	if err = qualification.CheckFreshnessContext(ctx); err != nil {
 		return err
 	}
 	snapshot, err := r.builder.Build(ctx, job)
@@ -268,7 +284,7 @@ func (r *EffectRunner) Run(ctx context.Context, body *manifestbody.UnqualifiedOp
 	if ctx.Err() != nil {
 		return unavailable("job_deadline")
 	}
-	if err = qualification.CheckFreshness(); err != nil {
+	if err = qualification.CheckFreshnessContext(ctx); err != nil {
 		return err
 	}
 	if err = r.signer.Sign(ctx, &SignJob{build: job, snapshot: snapshot, record: record}); err != nil {

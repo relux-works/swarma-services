@@ -12,9 +12,11 @@ import (
 // no cross-phase successful observation. Source and Clock implementations must
 // be concurrency safe if the eventual caller uses this component concurrently.
 type Authority struct {
-	policy Policy
-	source Source
-	clock  Clock
+	policy          Policy
+	source          Source
+	clock           Clock
+	installed       PolicySource
+	installedDigest string
 }
 
 func New(policy Policy, source Source, clock Clock) (*Authority, error) {
@@ -28,7 +30,7 @@ func New(policy Policy, source Source, clock Clock) (*Authority, error) {
 	for i := range p.OwnerKeys {
 		p.OwnerKeys[i].PublicKey = bytes.Clone(p.OwnerKeys[i].PublicKey)
 	}
-	return &Authority{p, source, clock}, nil
+	return &Authority{policy: p, source: source, clock: clock}, nil
 }
 
 func text(s string, max int) bool {
@@ -107,6 +109,9 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	if !validRequest(request, a.policy) {
 		return nil, rejected("request_binding")
 	}
+	if ctx == nil {
+		return nil, unavailable("authority_budget")
+	}
 	start, err := a.clock.Read()
 	if err != nil || !validReading(start) {
 		return nil, unavailable("clock")
@@ -115,6 +120,9 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	defer cancel()
 	if ctx.Err() != nil {
 		return nil, unavailable("authority_budget")
+	}
+	if err := checkInstalled(ctx, a.installed, a.installedDigest); err != nil {
+		return nil, err
 	}
 	query := Query{request, phase}
 	o, err := a.source.Read(ctx, query)
@@ -176,6 +184,9 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 	if err != nil {
 		return nil, err
 	}
+	if err := checkInstalled(ctx, a.installed, a.installedDigest); err != nil {
+		return nil, err
+	}
 	// Parsing/cryptography is inside the SAME authority phase budget, not an
 	// unmetered tail after the Source callback's 30-second deadline.
 	final, err := a.clock.Read()
@@ -201,7 +212,7 @@ func (a *Authority) qualify(ctx context.Context, request Request, phase Phase) (
 		return nil, unavailable("lease_clock")
 	}
 	summary := Summary{Binding: query, Tree: c.tree, OwnerFingerprint: owner, DefaultHead: o.Repository.DefaultHead, Relationship: relationship, PR: o.PR.Number, PlatformReviewID: review.ID, Verdict: "ACCEPT", VerdictBodySHA256: digest, CheckPolicyRef: o.CheckPolicy.Ref, CheckVerdict: checkVerdict, ObservedAt: o.ObservedAt, ExpiresAt: o.ExpiresAt}
-	return &Qualification{summary: summary, clock: a.clock, start: final, deadline: deadline}, nil
+	return &Qualification{summary: summary, clock: a.clock, start: final, deadline: deadline, installed: a.installed, installedDigest: a.installedDigest}, nil
 }
 
 func bounded(o Observation, p Profile) error {

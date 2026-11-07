@@ -32,7 +32,7 @@ Required checks are matched by exact head and context/application identity again
 
 Observations use zero positive future tolerance and a 1..300-second lease; the complete source read and local verification share one absolute 30-second budget, and remaining lifetime is capped by a same-process monotonic deadline without rounding fractional time upward. Sampled clock readings carry their full measured `SampleSpan`: receipt deadlines retain the leading monotonic anchor, while final qualification, budget and freshness checks include the trailing endpoint and conservative upper wall bound. Sampling delay cannot extend the receipt deadline or hide expiry inside the measured bracket.
 
-`CheckFreshness` checks only the local lease and trusted clock epoch; it cannot establish another phase or replace a new presign observation, current revocation check or final release-policy check.
+`CheckFreshness` checks the local lease and trusted clock epoch. The optional [protected local Policy route](protected-policy.md) also rereads the current installed file digest, both at qualification boundaries and freshness checks. This cannot establish another phase or replace a new presign provider observation or final release-policy check. Effect callers pass their original job context to `CheckFreshnessContext`.
 
 ## Trust boundary and remaining dependencies
 

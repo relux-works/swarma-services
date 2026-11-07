@@ -58,6 +58,12 @@ effect adapters have no production implementation. Source controls do not admit
 policy, peers, native builders, signing or durable operation recovery; the
 existing native readiness refusal remains unchanged.
 
+The [protected local Policy loader](docs/protected-policy.md) serializes only the
+existing core fields as CCJ-1, validates a fixed custodian-owned Linux file and
+binds its complete byte digest across independent boundary/freshness reads.
+It supplies source only; exact-byte admission, installation and independent
+review remain required before the protected route is used.
+
 The public decoder admits at most 1,048,576 actual BODY bytes. Entries are nonempty and at most 8,192; receipt
 records are at most 512; regular files are at most 64 MiB and their checked sum at most 1 GiB. Decoded entry paths,
 link targets and module paths are bounded at 1,024 UTF-8 bytes; module versions at 128 ASCII bytes. Source symlink
