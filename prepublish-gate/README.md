@@ -231,6 +231,23 @@ input: their signatures and unchanged contents are excluded. Merges, unrelated
 histories and root candidates refuse. There is no implicit default branch or base;
 a publication plan requires an explicit `--default-ref refs/heads/NAME`.
 
+`unsupported_merge_errors=1` identifies a multi-parent commit encountered by the
+bounded candidate history parser after object inventory and native strict fsck
+have succeeded. It accompanies `scan_errors=1`, `completed=0` and exit 1 for both
+`check` and `publish`, with or without `--shallow-base`. Two-parent and octopus
+commits are unsupported; the parser never selects a parent or scans a partial
+merge as a clean candidate. The value is a refusal indicator, not a count of all
+merges. A merge behind a single-parent candidate also triggers it when reached
+within the history bound. The trusted base itself is outside candidate parsing.
+No publication is attempted on this refusal, and zero hit/signature counts do not
+establish clean content or verified signatures.
+
+The indicator is not an exhaustive merge detector: earlier admission, policy,
+storage, pool-limit, integrity, missing-closure or malformed-record failures, and
+the history bound, retain their existing errors and leave it zero. Roots and
+unrelated single-parent histories also leave it zero. It does not classify an
+I/O failure or a private-pattern finding as an unsupported merge.
+
 Each commit's complete UTF-8 message is one record. Each non-signature logical
 header (including author, committer, tree, parent and extra headers) is a `header`
 record; continuation lines stay in that record with their LF and leading space.
@@ -441,12 +458,16 @@ if it refuses, TMPDIR is not checked. A counter covers any directory admission
 failure (including mode, ownership, symlink, missing or non-clean absolute path),
 not only permissions. Other scan and signature failures leave these counters at
 zero. No error details are written to stderr.
-Both admission keys and `pool_limit_errors` are always emitted, including zero
-values, between `scan_errors` and `signature_errors`. The pool key is additive;
+The two admission keys, `pool_limit_errors` and `unsupported_merge_errors` (four
+keys in all) are always
+emitted, including zero values, between `scan_errors` and `signature_errors`.
+The pool and unsupported-merge keys are additive;
 existing fields, error exits and scan-failure semantics remain unchanged. Consumers
 decoding known fields can continue using `scan_errors` and `completed`; consumers
 comparing exact JSON bytes or rejecting unknown fields must admit the new integer
-key. The separate `tails` output adds safe-scope coverage fields described in
+keys. Help requests continue to return the existing counts-only argument refusal;
+the diagnostic meanings are documented here rather than emitted as caller text.
+The separate `tails` output adds safe-scope coverage fields described in
 [TAILS.md](TAILS.md); strict consumers must admit those fields. No separate unknown-base
 counter is introduced; that failure remains generic.
 

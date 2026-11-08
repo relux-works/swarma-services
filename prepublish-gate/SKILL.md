@@ -37,6 +37,8 @@ and the directory example do not establish those qualifications.
 admission refusals while preserving `scan_errors=1`, `completed=0` and exit 1.
 HOME is checked first. Counters disclose no paths, values or OS diagnostics.
 
+`unsupported_merge_errors=1` identifies the first parsed multi-parent refusal after inventory and strict fsck, with `scan_errors=1`, `completed=0` and exit 1; earlier failures leave it zero.
+
 Large stored histories can exceed the unchanged aggregate pool bounds even for a
 small candidate diff. `pool_limit_errors=1` distinguishes that limit while retaining
 `scan_errors=1`, `completed=0` and exit 1; it discloses no caller bytes. Follow the

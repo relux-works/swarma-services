@@ -17,28 +17,29 @@ import (
 )
 
 type Report struct {
-	Completed             int `json:"completed"`
-	Commits               int `json:"commits"`
-	Signatures            int `json:"signatures"`
-	Paths                 int `json:"paths"`
-	AddedLines            int `json:"added_lines"`
-	Messages              int `json:"messages"`
-	Headers               int `json:"headers"`
-	PrivateHits           int `json:"private_hits"`
-	HygieneHits           int `json:"hygiene_hits"`
-	HygieneExceptions     int `json:"hygiene_exceptions"`
-	PublishedRefs         int `json:"published_refs"`
-	ArgumentErrors        int `json:"argument_errors"`
-	ScanErrors            int `json:"scan_errors"`
-	PoolLimitErrors       int `json:"pool_limit_errors"`
-	HomeAdmissionErrors   int `json:"home_admission_errors"`
-	TmpdirAdmissionErrors int `json:"tmpdir_admission_errors"`
-	SignatureErrors       int `json:"signature_errors"`
-	LeaseErrors           int `json:"lease_errors"`
-	PublicationErrors     int `json:"publication_errors"`
-	CleanupErrors         int `json:"cleanup_errors"`
-	Commands              int `json:"commands"`
-	CommandBytes          int `json:"command_bytes"`
+	Completed              int `json:"completed"`
+	Commits                int `json:"commits"`
+	Signatures             int `json:"signatures"`
+	Paths                  int `json:"paths"`
+	AddedLines             int `json:"added_lines"`
+	Messages               int `json:"messages"`
+	Headers                int `json:"headers"`
+	PrivateHits            int `json:"private_hits"`
+	HygieneHits            int `json:"hygiene_hits"`
+	HygieneExceptions      int `json:"hygiene_exceptions"`
+	PublishedRefs          int `json:"published_refs"`
+	ArgumentErrors         int `json:"argument_errors"`
+	ScanErrors             int `json:"scan_errors"`
+	PoolLimitErrors        int `json:"pool_limit_errors"`
+	UnsupportedMergeErrors int `json:"unsupported_merge_errors"`
+	HomeAdmissionErrors    int `json:"home_admission_errors"`
+	TmpdirAdmissionErrors  int `json:"tmpdir_admission_errors"`
+	SignatureErrors        int `json:"signature_errors"`
+	LeaseErrors            int `json:"lease_errors"`
+	PublicationErrors      int `json:"publication_errors"`
+	CleanupErrors          int `json:"cleanup_errors"`
+	Commands               int `json:"commands"`
+	CommandBytes           int `json:"command_bytes"`
 }
 
 type updates []string
@@ -205,6 +206,9 @@ func Execute(ctx context.Context, c Config) (r Report, code int) {
 	}
 	commits, e := history(g, c.Base, c.Candidate)
 	if e != nil {
+		if e == unsupportedMergeFailure {
+			r.UnsupportedMergeErrors = 1
+		}
 		r.ScanErrors = 1
 		return
 	}
@@ -325,11 +329,21 @@ func history(g *runner, base, candidate string) ([]commit, error) {
 			}
 			headers = append(headers, []byte(record))
 		}
-		if len(parents) != 1 || !oidRE.MatchString(parents[0]) {
+		for _, parent := range parents {
+			if !oidRE.MatchString(parent) {
+				return nil, refused
+			}
+		}
+		if len(parents) == 0 {
 			return nil, refused
 		}
 		if signatures > 1 {
 			return nil, refused
+		}
+		// Diagnose only a parsed multi-parent commit after native integrity and
+		// closure checks. Never select one parent and silently omit the others.
+		if len(parents) > 1 {
+			return nil, unsupportedMergeFailure
 		}
 		result = append(result, commit{oid: current, parent: parents[0], message: a[1], headers: headers})
 		current = parents[0]

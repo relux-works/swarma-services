@@ -33,6 +33,7 @@ const (
 
 var refused = errors.New("refused")
 var poolLimitFailure = errors.New("object pool limit")
+var unsupportedMergeFailure = errors.New("unsupported merge")
 var oidRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var principalRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@+-]{0,127}$`)
 var repoRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$`)
