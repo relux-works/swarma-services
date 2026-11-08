@@ -153,6 +153,7 @@ type originalGitFixture struct {
 	open                atomic.Int32
 	head, raw           []byte
 	refs, advert, fetch []byte
+	stockFetch          func([]byte) []byte
 	move                bool
 	status              int
 	truncate            bool
@@ -239,6 +240,9 @@ func originalGitLab(t *testing.T, mutate func(*originalGitFixture)) *originalGit
 					t.Error("fetch binding/filter")
 				}
 				response = l.fetch
+				if l.stockFetch != nil {
+					response = l.stockFetch(request)
+				}
 			}
 		default:
 			t.Error("noncanonical Git endpoint")
@@ -280,8 +284,62 @@ func originalGitLab(t *testing.T, mutate func(*originalGitFixture)) *originalGit
 	return l
 }
 
+// Keep synthetic packs for malformed-wire tests, but make the success control
+// execute stock upload-pack on the reader's actual protocol-v2 fetch request.
+func originalGitStockFetch(t *testing.T, l *originalGitFixture, ignoreNoProgress bool) {
+	t.Helper()
+	dir := t.TempDir()
+	repo := dir + "/fixture.git"
+	git := func(input []byte, args ...string) ([]byte, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "LC_ALL=C", "GIT_PROTOCOL=version=2"}
+		cmd.Stdin = bytes.NewReader(input)
+		return cmd.Output()
+	}
+	setup := func(input []byte, args ...string) []byte {
+		t.Helper()
+		out, err := git(input, args...)
+		if err != nil {
+			t.Fatalf("offline stock Git setup: %v", err)
+		}
+		return out
+	}
+	setup(nil, "init", "--bare", "--quiet", "--object-format=sha1", repo)
+	setup(nil, "-C", repo, "config", "uploadpack.allowFilter", "true")
+	// This reader deliberately refuses deltas; make the reference server use
+	// its supported commit-only, non-delta subset without constructing a pack.
+	setup(nil, "-C", repo, "config", "pack.window", "0")
+	tree := strings.TrimSpace(string(setup(nil, "-C", repo, "hash-object", "-w", "-t", "tree", "--stdin")))
+	_, key, pub := fixtureKey(t)
+	l.raw = fixtureSign(t, []byte("tree "+tree+"\nauthor Fixture <fixture@example.invalid> 1740000000 +0000\ncommitter Fixture <fixture@example.invalid> 1740000000 +0000\n\nStock Git parent fixture.\n"), key, pub, "sha512")
+	l.q.Commit = fixtureOID(l.raw)
+	l.head = fixtureSign(t, []byte("tree "+tree+"\nparent "+l.q.Commit+"\nauthor Fixture <fixture@example.invalid> 1740000001 +0000\ncommitter Fixture <fixture@example.invalid> 1740000001 +0000\n\nStock Git descendant fixture.\n"), key, pub, "sha512")
+	l.r.policy.OwnerKeys = []OwnerKey{{Repository: l.r.policy.CanonicalRepository, Fingerprint: fixtureFingerprint(pub), PublicKey: pub}}
+	for _, raw := range [][]byte{l.raw, l.head} {
+		oid := strings.TrimSpace(string(setup(raw, "-C", repo, "hash-object", "-w", "-t", "commit", "--stdin")))
+		if oid != fixtureOID(raw) {
+			t.Fatal("stock Git changed raw commit identity")
+		}
+	}
+	setup(nil, "-C", repo, "update-ref", "refs/heads/main", fixtureOID(l.head))
+	l.refs = originalGitFixtureRefs(fixtureOID(l.head), "main")
+	l.stockFetch = func(request []byte) []byte {
+		if ignoreNoProgress {
+			// Model a server ignoring the client's suppression request. Stock
+			// Git generates the unsolicited progress, rather than a fake band.
+			request = bytes.ReplaceAll(request, []byte(originalGitPacket("no-progress\n")), nil)
+		}
+		out, err := git(request, "upload-pack", "--stateless-rpc", repo)
+		if err != nil {
+			t.Errorf("offline stock Git fetch: %v", err)
+			return nil
+		}
+		return out
+	}
+}
+
 func TestOriginalGitProtocolRawSignedAncestry(t *testing.T) {
-	l := originalGitLab(t, nil)
+	l := originalGitLab(t, func(l *originalGitFixture) { originalGitStockFetch(t, l, false) })
 	got, err := l.r.ReadOriginalGitHubObjects(l.ctx, l.q)
 	if err != nil {
 		t.Fatal(err)
@@ -296,11 +354,21 @@ func TestOriginalGitProtocolRawSignedAncestry(t *testing.T) {
 	if _, err = verifyOwner(c, l.r.policy); err != nil {
 		t.Fatal("original signature lost", err)
 	}
-	if c.oid != l.q.Commit || c.tree != strings.Repeat("1", 40) {
+	if c.oid != l.q.Commit || c.tree != "4b825dc642cb6eb9a060e54bf8d69288fbee4904" {
 		t.Fatal("content OID/tree changed")
 	}
 	if l.requests.Load() != 4 || l.r.phase.responsesLeft != 1020 || l.r.phase.bytesLeft >= acquisitionAggregateMax {
 		t.Fatal("attempt/byte accounting missing")
+	}
+	waitAcquisition(t, func() bool { return l.open.Load() == 0 && l.connector.live.Load() == 0 })
+}
+
+func TestOriginalGitUnsolicitedProgress(t *testing.T) {
+	l := originalGitLab(t, func(l *originalGitFixture) { originalGitStockFetch(t, l, true) })
+	got, err := l.r.ReadOriginalGitHubObjects(l.ctx, l.q)
+	r, ok := err.(*Refusal)
+	if !ok || r.Predicate() != "github_git_sideband" || got.Commit != nil || got.LandingPath != nil || got.Repository.Canonical != "" {
+		t.Fatalf("unsolicited progress returned material or wrong refusal: %v", err)
 	}
 	waitAcquisition(t, func() bool { return l.open.Load() == 0 && l.connector.live.Load() == 0 })
 }

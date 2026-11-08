@@ -239,24 +239,24 @@ func TestEffectiveChecksTransportAndRecheckRefusals(t *testing.T) {
 	}
 }
 
-func TestEffectiveChecksAdmissionAndCapacity(t *testing.T) {
-	for _, mode := range []string{"canceled", "no_deadline", "renewed_deadline", "bytes", "attempts", "record_limit", "body_limit", "auth", "connector", "endpoint", "query", "second_read_budget"} {
+func TestEffectiveChecksAdmission(t *testing.T) {
+	for _, mode := range []string{"admitted", "canceled", "no_deadline", "renewed_deadline", "record_limit", "body_limit", "auth", "connector", "endpoint", "application"} {
 		t.Run(mode, func(t *testing.T) {
 			l := newEffectiveLab(t)
-			q := l.r.query
+			want := "github_effective_checks_admission"
 			switch mode {
+			case "admitted":
+				want = ""
 			case "canceled":
-				l.cancel()
+				// Cancel the admitted context itself; parent propagation may
+				// still be queued when this synchronous predicate is called.
+				l.r.phase.cancel()
 			case "no_deadline":
 				l.ctx = context.Background()
 			case "renewed_deadline":
 				var cancel context.CancelFunc
 				l.ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-			case "bytes":
-				l.r.phase.bytesLeft = 1024
-			case "attempts":
-				l.r.phase.responsesLeft = 0
 			case "record_limit":
 				l.r.policy.Profile.CheckRecords = 0
 			case "body_limit":
@@ -267,20 +267,34 @@ func TestEffectiveChecksAdmissionAndCapacity(t *testing.T) {
 				l.r.phase.source.connector = nil
 			case "endpoint":
 				l.r.phase.source.endpoints["effective-rules"] = installedEndpoint{url: "https://other.invalid/rules", kind: metadataResponse}
-			case "query":
-				q.Commit = strings.Repeat("e", 40)
-			case "second_read_budget":
-				l.r.phase.responsesLeft = 6
+				want = "github_effective_checks_endpoint"
+			case "application":
+				l.r.applications[17] = "github-app:18"
+				want = "github_effective_checks_application"
 			}
-			got, err := l.r.ReadEffectiveGitHubChecks(l.ctx, q)
-			if err == nil || !reflect.DeepEqual(got, GitHubEffectiveChecks{}) {
-				t.Fatal("admission returned evidence")
+			err := l.r.admitted(l.ctx)
+			if want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if refusal, ok := err.(*Refusal); !ok || refusal.Predicate() != want {
+				t.Fatalf("wanted %s, got %v", want, err)
 			}
-			wantCalls := int32(0)
-			if l.calls.Load() != wantCalls {
-				t.Fatalf("calls=%d want=%d", l.calls.Load(), wantCalls)
+			if l.calls.Load() != 0 {
+				t.Fatalf("admission initiated %d calls", l.calls.Load())
 			}
 		})
+	}
+}
+
+func TestEffectiveChecksPublicQueryRefusal(t *testing.T) {
+	l := newEffectiveLab(t)
+	q := l.r.query
+	q.Commit = strings.Repeat("e", 40)
+	got, err := l.r.ReadEffectiveGitHubChecks(l.ctx, q)
+	r, ok := err.(*Refusal)
+	if !ok || r.Predicate() != "github_effective_checks_admission" || !reflect.DeepEqual(got, GitHubEffectiveChecks{}) || l.calls.Load() != 0 {
+		t.Fatalf("mismatched public query admitted: %v", err)
 	}
 }
 

@@ -102,7 +102,7 @@ func (r *originalGitHubReader) ReadOriginalGitHubObjects(ctx context.Context, q 
 	// No arbitrary want, URL, headers, command, shell or local Git invocation.
 	request := originalGitPacket("command=fetch\n") + originalGitPacket("object-format=sha1\n") + "0001" +
 		originalGitPacket("want "+head+"\n") + originalGitPacket("deepen "+strconv.Itoa(countMax)+"\n") +
-		originalGitPacket("filter tree:0\n") + originalGitPacket("done\n") + "0000"
+		originalGitPacket("filter tree:0\n") + originalGitPacket("no-progress\n") + originalGitPacket("done\n") + "0000"
 	wire, err := p.originalGitExchange(transportCtx, policy, []byte(request), false)
 	if err != nil {
 		return out, err
