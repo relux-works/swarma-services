@@ -18,9 +18,31 @@ The composition owner needs a small, separately reviewed integration change:
   for this new transport's conservative TLS reservation.
 
 The supported wire subset is smart HTTPS Git protocol v2, SHA-1, filtered
-commit-only pack v2 without deltas. Unsupported capabilities, pack encodings,
-progress/fatal sidebands and extra refs refuse. Supporting common delta packs
-is remaining reader work, so this is a bounded PARTIAL implementation.
+commit-only pack v2 with full commits and in-pack REF_DELTA objects. Delta
+instructions reproduce original bytes before normal commit parsing and content
+OID checks. Bases may occur before or after their users. The existing inventory
+count bounds resolution passes and chain length; both inflated instructions and
+reconstructed commits must fit the existing commit-size ceiling. All storage,
+copy/parser work and bounded resolution scans debit the same phase byte ledger,
+without refunds, a new budget or a renewed deadline.
+
+Missing/external bases, unresolved cycles, OFS_DELTA, other object kinds,
+malformed instructions, invalid sizes/ranges, checksum failures, duplicates and
+incomplete/trailing packs refuse. There is no thin-pack lookup or Git subprocess
+fallback. The client does not request `ofs-delta` or `thin-pack`.
+
+REF_DELTA qualification is a prerequisite before any real reader integration or
+issuance. The offline default-window stock-Git control inspects object headers
+to require an actual REF_DELTA, then verifies exact signed commits, trees, OIDs,
+ancestry and shared accounting. The older `pack.window=0` control covers only
+the explicitly limited non-delta subset. Neither control qualifies a live
+provider. Fresh independent whole-candidate review, an exact-head marker and
+pinned-dependency Linux CI must qualify this source revision before publication;
+the separate transport/phase integration obligations above still apply.
+
+This remains a bounded PARTIAL implementation with unreachable new readers.
+The public effective-checks port still refuses, no issuer or provider is
+installed, and the separate `q-gql-token` integration question remains open.
 
 The reader checks canonical installed repository/name, default HEAD symref and
 branch OID, exact requested object OID, raw pack and commit hashes, bounded real

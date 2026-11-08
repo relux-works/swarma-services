@@ -287,6 +287,10 @@ func originalGitLab(t *testing.T, mutate func(*originalGitFixture)) *originalGit
 // Keep synthetic packs for malformed-wire tests, but make the success control
 // execute stock upload-pack on the reader's actual protocol-v2 fetch request.
 func originalGitStockFetch(t *testing.T, l *originalGitFixture, ignoreNoProgress bool) {
+	originalGitStockFetchWindow(t, l, ignoreNoProgress, true)
+}
+
+func originalGitStockFetchWindow(t *testing.T, l *originalGitFixture, ignoreNoProgress, zeroWindow bool) {
 	t.Helper()
 	dir := t.TempDir()
 	repo := dir + "/fixture.git"
@@ -306,11 +310,19 @@ func originalGitStockFetch(t *testing.T, l *originalGitFixture, ignoreNoProgress
 	}
 	setup(nil, "init", "--bare", "--quiet", "--object-format=sha1", repo)
 	setup(nil, "-C", repo, "config", "uploadpack.allowFilter", "true")
-	// This reader deliberately refuses deltas; make the reference server use
-	// its supported commit-only, non-delta subset without constructing a pack.
-	setup(nil, "-C", repo, "config", "pack.window", "0")
+	// Retain the old explicitly limited non-delta positive. The default-window
+	// qualification calls this helper with false and inspects actual pack kinds.
+	if zeroWindow {
+		setup(nil, "-C", repo, "config", "pack.window", "0")
+	}
 	tree := strings.TrimSpace(string(setup(nil, "-C", repo, "hash-object", "-w", "-t", "tree", "--stdin")))
-	_, key, pub := fixtureKey(t)
+	// A public synthetic seed makes the stock exchange byte-identical across
+	// old/new reader controls. This key exists only in the offline test fixture.
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize))
+	var public bytes.Buffer
+	fixtureString(&public, []byte("ssh-ed25519"))
+	fixtureString(&public, key.Public().(ed25519.PublicKey))
+	pub := public.Bytes()
 	l.raw = fixtureSign(t, []byte("tree "+tree+"\nauthor Fixture <fixture@example.invalid> 1740000000 +0000\ncommitter Fixture <fixture@example.invalid> 1740000000 +0000\n\nStock Git parent fixture.\n"), key, pub, "sha512")
 	l.q.Commit = fixtureOID(l.raw)
 	l.head = fixtureSign(t, []byte("tree "+tree+"\nparent "+l.q.Commit+"\nauthor Fixture <fixture@example.invalid> 1740000001 +0000\ncommitter Fixture <fixture@example.invalid> 1740000001 +0000\n\nStock Git descendant fixture.\n"), key, pub, "sha512")

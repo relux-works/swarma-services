@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
 	"strconv"
 	"strings"
@@ -367,9 +368,9 @@ func originalGitPackSection(p *acquisitionPhase, b []byte) ([]byte, error) {
 	return nil, unavailable("github_git_sideband")
 }
 
-// Git's SHA-1 object format is the exact supported subset. No metadata is
-// reconstructed. Deltas, non-commit objects and incomplete/trailing packs refuse
-// explicitly; supporting those encodings is a future reader-only extension.
+// Git's SHA-1 format supports full commits and in-pack REF_DELTA commits only.
+// Delta application reproduces exact original bytes, never synthesized metadata.
+// Thin/external bases, other object kinds and incomplete/trailing packs refuse.
 func originalGitUnpack(p *acquisitionPhase, pack []byte, commitMax, countMax int) (map[string][]byte, error) {
 	if len(pack) < 32 || string(pack[:4]) != "PACK" || binary.BigEndian.Uint32(pack[4:8]) != 2 {
 		return nil, unavailable("github_git_pack")
@@ -386,6 +387,11 @@ func originalGitUnpack(p *acquisitionPhase, pack []byte, commitMax, countMax int
 		return nil, unavailable("github_git_pack_hash")
 	}
 	objects := make(map[string][]byte, int(n))
+	type deltaObject struct {
+		base string
+		data []byte
+	}
+	deltas := make([]deltaObject, 0, int(n))
 	reader := bytes.NewReader(pack[12 : len(pack)-20])
 	for i := int64(0); i < n; i++ {
 		first, err := reader.ReadByte()
@@ -410,7 +416,7 @@ func originalGitUnpack(p *acquisitionPhase, pack []byte, commitMax, countMax int
 			size |= uint64(b&127) << shift
 			shift += 7
 		}
-		if kind != 1 {
+		if kind != 1 && kind != 7 {
 			return nil, unavailable("github_git_unsupported_pack_object")
 		}
 		if size == 0 || size > uint64(commitMax) {
@@ -420,6 +426,14 @@ func originalGitUnpack(p *acquisitionPhase, pack []byte, commitMax, countMax int
 		// reserved before zlib or commit parsing; reserve is never refunded.
 		if err = p.originalGitCharge(int64(size)*64 + 65536); err != nil {
 			return nil, err
+		}
+		var base string
+		if kind == 7 {
+			var oid [20]byte
+			if _, err = io.ReadFull(reader, oid[:]); err != nil {
+				return nil, unavailable("github_git_delta_base")
+			}
+			base = hex.EncodeToString(oid[:])
 		}
 		z, err := zlib.NewReader(reader)
 		if err != nil {
@@ -433,6 +447,10 @@ func originalGitUnpack(p *acquisitionPhase, pack []byte, commitMax, countMax int
 		if err != nil || extra != 0 || eof != io.EOF || closeErr != nil {
 			return nil, unavailable("github_git_incomplete_object")
 		}
+		if kind == 7 {
+			deltas = append(deltas, deltaObject{base, raw})
+			continue
+		}
 		c, err := parseCommit(raw)
 		if err != nil {
 			return nil, unavailable("github_git_commit")
@@ -444,6 +462,49 @@ func originalGitUnpack(p *acquisitionPhase, pack []byte, commitMax, countMax int
 	}
 	if reader.Len() != 0 {
 		return nil, unavailable("github_git_trailing_pack")
+	}
+	// Bases may follow their users. At most n passes over n entries resolve
+	// every acyclic in-pack chain; no recursion or external lookup is allowed.
+	if err := p.originalGitCharge(n * n * 32); err != nil {
+		return nil, err
+	}
+	left := len(deltas)
+	for pass := int64(0); left > 0 && pass < n; pass++ {
+		progress := false
+		for i := range deltas {
+			if err := p.originalGitCharge(0); err != nil {
+				return nil, err
+			}
+			d := &deltas[i]
+			if d.data == nil {
+				continue
+			}
+			base, ok := objects[d.base]
+			if !ok {
+				continue
+			}
+			raw, err := originalGitApplyDelta(p, base, d.data, commitMax)
+			if err != nil {
+				return nil, err
+			}
+			c, err := parseCommit(raw)
+			if err != nil {
+				return nil, unavailable("github_git_commit")
+			}
+			if _, duplicate := objects[c.oid]; duplicate {
+				return nil, unavailable("github_git_duplicate_object")
+			}
+			objects[c.oid] = raw
+			d.data = nil
+			left--
+			progress = true
+		}
+		if !progress {
+			return nil, unavailable("github_git_delta_unresolved")
+		}
+	}
+	if left != 0 {
+		return nil, unavailable("github_git_delta_unresolved")
 	}
 	return objects, nil
 }

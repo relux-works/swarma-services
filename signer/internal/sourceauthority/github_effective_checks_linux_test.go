@@ -240,13 +240,28 @@ func TestEffectiveChecksTransportAndRecheckRefusals(t *testing.T) {
 }
 
 func TestEffectiveChecksAdmission(t *testing.T) {
-	for _, mode := range []string{"admitted", "canceled", "no_deadline", "renewed_deadline", "record_limit", "body_limit", "auth", "connector", "endpoint", "application"} {
+	for _, mode := range []string{"admitted", "derived_same_deadline", "canceled", "no_deadline", "renewed_deadline", "record_limit", "body_limit", "auth", "connector", "endpoint", "application"} {
 		t.Run(mode, func(t *testing.T) {
 			l := newEffectiveLab(t)
 			want := "github_effective_checks_admission"
 			switch mode {
 			case "admitted":
 				want = ""
+			case "derived_same_deadline":
+				// Isolate exact context identity: cancellation state and deadline
+				// remain valid, and the original context succeeds on this reader.
+				if err := l.r.admitted(l.ctx); err != nil {
+					t.Fatal("original context refused", err)
+				}
+				original := l.ctx
+				var cancel context.CancelFunc
+				l.ctx, cancel = context.WithCancel(original)
+				defer cancel()
+				d, ok := l.ctx.Deadline()
+				pd, pok := original.Deadline()
+				if l.ctx == original || !ok || !pok || !d.Equal(pd) || l.ctx.Err() != nil {
+					t.Fatal("context control did not isolate identity")
+				}
 			case "canceled":
 				// Cancel the admitted context itself; parent propagation may
 				// still be queued when this synchronous predicate is called.
@@ -279,6 +294,11 @@ func TestEffectiveChecksAdmission(t *testing.T) {
 				}
 			} else if refusal, ok := err.(*Refusal); !ok || refusal.Predicate() != want {
 				t.Fatalf("wanted %s, got %v", want, err)
+			}
+			if mode == "derived_same_deadline" {
+				if err := l.r.admitted(l.r.phase.ctx); err != nil {
+					t.Fatal("original context neighbor stopped succeeding", err)
+				}
 			}
 			if l.calls.Load() != 0 {
 				t.Fatalf("admission initiated %d calls", l.calls.Load())
