@@ -53,6 +53,42 @@ prepublish-gate check \
 
 All flags follow `check` or `publish`; positional arguments, unknown flags and help
 requests refuse. The command requires private 0700 absolute HOME and TMPDIR.
+On macOS as well, use dedicated directories instead of the ordinary login HOME
+or system temporary directory; do not change those host directories' permissions.
+For example, create a task-owned working directory and run the built tool with:
+
+```sh
+(
+umask 077
+mkdir -m 700 ./gate-home ./gate-tmp
+HOME="$PWD/gate-home"
+TMPDIR="$PWD/gate-tmp"
+TMPDIR=${TMPDIR%/}
+HOME=${HOME%/}
+export HOME TMPDIR
+prepublish-gate check \
+  --objects /private/source/.git/objects --base BASE_OID --candidate CANDIDATE_OID \
+  --patterns /private/controls/patterns --allowed-signers /private/controls/signers \
+  --principal release@example.test
+)
+```
+
+macOS commonly supplies a trailing `/` in TMPDIR, which the clean-path admission
+check refuses even when the directory is owned by the effective UID and is 0700.
+After selecting a dedicated directory as above, or an existing directory explicitly
+admitted against the same ownership, non-symlink and 0700 requirements, use
+`TMPDIR=${TMPDIR%/}` before invoking the tool. HOME must likewise have no trailing
+slash; use `HOME=${HOME%/}` if the selected HOME value has one. Export the adjusted
+values, as in the example. Removing a trailing slash only adjusts path spelling:
+it does not fix wrong permissions, ownership or symlinks. Do not chmod the host
+HOME or system temporary directory to make admission pass.
+
+Use clean absolute, non-symlink paths owned by the invoking effective UID. The
+tool refuses unsafe existing directories without repairing them. The caller owns
+these dedicated directories and their cleanup after the invocation; internal
+snapshots are removed on return. TMPDIR must have space for the private object
+copy and Git state. These environment overrides do not provide OS isolation or
+qualify native macOS operation.
 Pattern and control paths must be clean absolute paths to regular non-symlink
 files. Every control is checked against the effective UID and must deny group/other
 write; patterns additionally deny every group/other permission. Public signers and
@@ -168,6 +204,10 @@ such as the `Local` selector on `time`, or the `local()` selector on
 These false positives are an explicit limitation; the matcher does not parse
 language context. Per-user temporary forms include a username followed by a
 numeric identifier and the numeric user-directory form under the temporary root.
+The word-followed-by-digits rule is conservative: ordinary temporary names such
+as `build-2024` also trigger it, including beneath `var/tmp` and in URL-shaped
+text containing the same temporary path. Review such product examples through
+the exact-record hygiene exceptions described below; no exception is automatic.
 The module inspected the existing packet scanner's product guard conventions;
 it imports no private pattern inventory and shares no internal code.
 
@@ -281,6 +321,15 @@ Each error category has a numeric field. Zero hits with `completed=0` is a scan
 failure, never a clean result. Partial counts are diagnostic only and cannot
 permit publication. An output-write failure returns nonzero, without a fallback
 output channel. Unexpected internal panics produce only a fixed numeric refusal.
+
+`home_admission_errors=1` or `tmpdir_admission_errors=1` identifies refusal of
+the corresponding environment directory, without exposing its value or the
+underlying OS diagnostic. Both are additive integer counters: existing
+`scan_errors=1`, `completed=0` and exit 1 remain unchanged. HOME is checked first;
+if it refuses, TMPDIR is not checked. A counter covers any directory admission
+failure (including mode, ownership, symlink, missing or non-clean absolute path),
+not only permissions. Other scan and signature failures leave these counters at
+zero. No error details are written to stderr.
 
 | Resource | Fixed maximum |
 | --- | ---: |

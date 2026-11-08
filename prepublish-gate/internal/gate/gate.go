@@ -17,25 +17,27 @@ import (
 )
 
 type Report struct {
-	Completed         int `json:"completed"`
-	Commits           int `json:"commits"`
-	Signatures        int `json:"signatures"`
-	Paths             int `json:"paths"`
-	AddedLines        int `json:"added_lines"`
-	Messages          int `json:"messages"`
-	Headers           int `json:"headers"`
-	PrivateHits       int `json:"private_hits"`
-	HygieneHits       int `json:"hygiene_hits"`
-	HygieneExceptions int `json:"hygiene_exceptions"`
-	PublishedRefs     int `json:"published_refs"`
-	ArgumentErrors    int `json:"argument_errors"`
-	ScanErrors        int `json:"scan_errors"`
-	SignatureErrors   int `json:"signature_errors"`
-	LeaseErrors       int `json:"lease_errors"`
-	PublicationErrors int `json:"publication_errors"`
-	CleanupErrors     int `json:"cleanup_errors"`
-	Commands          int `json:"commands"`
-	CommandBytes      int `json:"command_bytes"`
+	Completed             int `json:"completed"`
+	Commits               int `json:"commits"`
+	Signatures            int `json:"signatures"`
+	Paths                 int `json:"paths"`
+	AddedLines            int `json:"added_lines"`
+	Messages              int `json:"messages"`
+	Headers               int `json:"headers"`
+	PrivateHits           int `json:"private_hits"`
+	HygieneHits           int `json:"hygiene_hits"`
+	HygieneExceptions     int `json:"hygiene_exceptions"`
+	PublishedRefs         int `json:"published_refs"`
+	ArgumentErrors        int `json:"argument_errors"`
+	ScanErrors            int `json:"scan_errors"`
+	HomeAdmissionErrors   int `json:"home_admission_errors"`
+	TmpdirAdmissionErrors int `json:"tmpdir_admission_errors"`
+	SignatureErrors       int `json:"signature_errors"`
+	LeaseErrors           int `json:"lease_errors"`
+	PublicationErrors     int `json:"publication_errors"`
+	CleanupErrors         int `json:"cleanup_errors"`
+	Commands              int `json:"commands"`
+	CommandBytes          int `json:"command_bytes"`
 }
 
 type updates []string
@@ -129,11 +131,15 @@ func Execute(ctx context.Context, c Config) (r Report, code int) {
 		}
 	}
 	home, tmp := os.Getenv("HOME"), os.Getenv("TMPDIR")
-	for _, p := range []string{home, tmp} {
-		if !privateDir(p) {
-			r.ScanErrors = 1
-			return
-		}
+	if !privateDir(home) {
+		r.ScanErrors = 1
+		r.HomeAdmissionErrors = 1
+		return
+	}
+	if !privateDir(tmp) {
+		r.ScanErrors = 1
+		r.TmpdirAdmissionErrors = 1
+		return
 	}
 	p, e := loadPolicy(c.Patterns, c.Exceptions)
 	if e != nil {

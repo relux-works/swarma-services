@@ -18,6 +18,27 @@ private input; there is no embedded inventory or fallback. Keep that file out of
 public source, diffs, history and artifacts. Private hits are counts only.
 A zero hit count is meaningful only with completed checks and a successful exit.
 
+Run with dedicated, effective-UID-owned, non-symlink 0700 HOME and TMPDIR at
+clean absolute paths, including on macOS; the ordinary login HOME can refuse.
+macOS TMPDIR commonly ends in `/`, which clean-path admission refuses even for
+an owned 0700 directory. After selecting dedicated directories or explicitly
+admitting existing ones against the same ownership, non-symlink and 0700 checks,
+use `TMPDIR=${TMPDIR%/}` and export TMPDIR before invocation. HOME must also have
+no trailing slash; use `HOME=${HOME%/}` and export HOME if needed. This adjusts
+path spelling only and does not fix wrong permissions, ownership or symlinks.
+Use the [private directory example](README.md#build-and-check); never chmod the
+host HOME or system temporary directory to make a check pass. The caller owns
+the dedicated directories and cleanup; allow TMPDIR space for the object copy
+and private Git state. These overrides are not OS isolation or Mac qualification.
+`home_admission_errors` and `tmpdir_admission_errors` distinguish directory
+admission refusals while preserving `scan_errors=1`, `completed=0` and exit 1.
+HOME is checked first. Counters disclose no paths, values or OS diagnostics.
+
+The temporary word-followed-by-digits hygiene rule can flag ordinary names such
+as `build-2024`, including beneath `var/tmp` and in URL-shaped text. Use only the
+documented, reviewed exact-record hygiene exception route for product examples;
+do not weaken the matcher or add default exceptions.
+
 Publication requires explicit user authorization, `publish --execute-publication`,
 a canonical matching repository/URL, the existing authorized-client configuration,
 an explicit default-branch ref that preflight observes equal to the base,
