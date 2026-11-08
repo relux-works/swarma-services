@@ -17,6 +17,9 @@ Owner decision, 2026-11-01: «давай сделаем проект сварм�
 
 - [pktscan](pktscan/README.md): bounded packet extraction and ERE scanning with counts-only output.
 
+- [prepublish-gate](prepublish-gate/README.md): immutable candidate scanning,
+  native SSH signature checks and explicit atomic publication with per-ref leases.
+
 ## Tools
 
 Git manages source history. Run `git diff --check` to check a patch for whitespace errors. Temporary evidence and
