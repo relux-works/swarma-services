@@ -17,7 +17,10 @@ this tool does not replace their review or authority contracts.
 ## Build and check
 
 Use the existing Go 1.26.8 toolchain. There are no third-party modules or downloads.
-The executable requires trusted `/usr/bin/git`, `/usr/bin/ssh-keygen`, and Linux.
+The executable requires trusted `/usr/bin/git` and `/usr/bin/ssh-keygen`.
+Runtime and sandbox checks are qualified only on Linux. Native macOS isolation,
+real publication and the GitHub HTTPS seam remain unqualified. Portable Go tests
+and the directory example do not establish those qualifications.
 GitHub publication additionally uses the existing `/usr/bin/gh` authorized client.
 
 ```sh
@@ -75,16 +78,17 @@ prepublish-gate check \
 
 macOS commonly supplies a trailing `/` in TMPDIR, which the clean-path admission
 check refuses even when the directory is owned by the effective UID and is 0700.
-After selecting a dedicated directory as above, or an existing directory explicitly
-admitted against the same ownership, non-symlink and 0700 requirements, use
+After selecting a dedicated directory as above, use
 `TMPDIR=${TMPDIR%/}` before invoking the tool. HOME must likewise have no trailing
 slash; use `HOME=${HOME%/}` if the selected HOME value has one. Export the adjusted
 values, as in the example. Removing a trailing slash only adjusts path spelling:
 it does not fix wrong permissions, ownership or symlinks. Do not chmod the host
 HOME or system temporary directory to make admission pass.
 
-Use clean absolute, non-symlink paths owned by the invoking effective UID. The
-tool refuses unsafe existing directories without repairing them. The caller owns
+Use clean absolute paths owned by the invoking effective UID; the directory's
+final component must not be a symlink. Symlinked ancestors are not rejected by
+this check, and ancestor safety is not established. The tool refuses directories
+that fail admission without repairing them. The caller owns
 these dedicated directories and their cleanup after the invocation; internal
 snapshots are removed on return. TMPDIR must have space for the private object
 copy and Git state. These environment overrides do not provide OS isolation or
@@ -95,13 +99,17 @@ write; patterns additionally deny every group/other permission. Public signers a
 exceptions permit 0600 or 0644, but never 0666. HOME, TMPDIR and the selected
 client directory also require effective-UID ownership and mode 0700. Native stat
 owner mapping is implemented for Linux, Darwin and the named BSD build targets;
-other mappings refuse. Only Linux was exercised here. POSIX mode admission does
+other mappings refuse. Runtime isolation is qualified only on Linux; portable
+tests do not qualify native macOS isolation. POSIX mode admission does
 not establish ACL or ancestor safety. Controls and object storage must remain
 trusted and quiescent; source-storage ownership is a caller precondition, not a
 recursive owner/ACL audit.
 Source objects are copied into a fresh 0700 private bare repository before checking.
 Native `git fsck --strict` verifies the complete stored object pool and the base and
-candidate closures. Corruption in unrelated stored objects may therefore refuse.
+candidate closures. By default this includes ancestry before the base. The explicit
+`--shallow-base` mode described below ends ancestry at that exact trusted base,
+while still verifying its entire tree. Corruption in unrelated stored objects may
+therefore refuse in either mode.
 Before fsck, native object metadata must declare at most 65,536 stored objects
 and 64 MiB total expanded object data. Every stored blob must fit 4 MiB;
 commits, trees and tags must each fit 1 MiB, including unrelated/base objects.
@@ -114,6 +122,86 @@ repository uses its own object view. Links at those paths still refuse. Incremen
 commit-graph directories and unknown metadata still refuse. Skipped regular files
 count toward the 4096-file visit bound. A private snapshot is deleted after either
 success or refusal.
+
+## Large histories and an explicit shallow base
+
+The pool limits apply to all stored objects, including old versions and unrelated
+objects, not only the candidate diff. `pool_limit_errors=1`, together with
+`scan_errors=1`, exit 1 and `completed=0`, identifies an aggregate object pool
+limit: copied storage bytes, visited object files, declared object count or total
+expanded bytes. A single object exceeding its type limit, malformed inventory,
+corruption or missing closure still produces the ordinary scan refusal without
+this counter. The counter identifies a confirmed limit, not every possible cause
+of a failure. No caller bytes, paths, OIDs or child diagnostics are reported.
+
+For a large history whose current baseline tree and bounded linear candidate
+chain fit the existing limits, acquire a separate shallow object pool and opt in
+to `--shallow-base`. This flag writes only the exact `--base` OID as the private
+repository's ancestry boundary. It never imports a source `shallow` file or treats
+the candidate or any intermediate commit as a boundary. Native strict fsck still
+checks every stored object, the complete baseline tree, and every candidate tree.
+The existing history parser must reach that exact base through at most 64
+single-parent candidate commits; signatures, messages, headers, paths and diffs
+are checked unchanged. Missing/corrupt objects within this scope, unrelated
+candidates, missing intermediate commits and merges still refuse. Only ancestry
+before the caller's already trusted base is excluded from closure. This changes
+no trust in the base's signatures or unchanged content, which remain external
+inputs in both modes.
+
+Acquire public source separately through the authorized acquisition route. For
+one candidate commit directly after the base, a depth-two acquisition suffices;
+for N candidate commits use depth N+1, with the exact base included. For example,
+against an already acquired, trusted, quiescent local public mirror:
+
+```sh
+git -c protocol.file.allow=always clone --bare --no-local --single-branch \
+  --branch candidate --depth=2 file:///private/public-mirror \
+  /private/bounded-candidate.git
+prepublish-gate check --shallow-base \
+  --objects /private/bounded-candidate.git/objects \
+  --base BASE_OID --candidate CANDIDATE_OID \
+  --patterns /private/controls/patterns --allowed-signers /private/controls/signers \
+  --principal release@example.test
+```
+
+The branch is acquisition input only: pin and verify the full expected base and
+candidate IDs before checking; the gate consumes only those IDs and object
+storage. An ordinary local clone can ignore depth or share storage, so use
+`--no-local` and the explicit file transport for this local preparation. The gate
+itself still does no fetch, network acquisition or source checkout. Do not
+manually remove required objects, import grafts/alternates, synthesize new commits,
+or rewrite signatures to make a check pass. Choose a fresh task-owned destination
+for each acquisition and retain it under the caller's custody.
+
+For a mirror that exposes the candidate only as a non-branch ref, use a fresh
+bare destination and an explicit fetch instead of `clone --branch`. For the same
+one-commit scope (replace `refs/pr/123/head` with the acquired candidate ref):
+
+```sh
+git init --bare /private/bounded-ref.git
+git -C /private/bounded-ref.git -c protocol.file.allow=always fetch --no-tags \
+  --depth=2 file:///private/public-mirror \
+  refs/pr/123/head:refs/heads/candidate
+git -C /private/bounded-ref.git rev-parse refs/heads/candidate
+git -C /private/bounded-ref.git rev-parse refs/heads/candidate^
+```
+
+Require those outputs to equal the full expected `CANDIDATE_OID` and `BASE_OID`,
+respectively, and the destination's `shallow` file to name exactly `BASE_OID`.
+Then use its `objects` directory in the same check above. For N candidate commits,
+use depth N+1 and verify the exact base at that boundary. This remains separate
+local acquisition; it grants no network or publication authority.
+
+The depth number alone proves neither sufficient closure nor intended ancestry.
+A missing base or a shallower boundary within the candidate chain refuses even
+with the flag. A depth-two input without the flag normally refuses if the base's
+parent is absent: the default still requires full ancestry closure. Adding the
+flag to an unpruned oversized pool does not bypass any pool limit. If the base
+and candidate trees themselves exceed a bound, this route remains unsupported;
+there is no automatic retry, larger limit or success through truncated scanning.
+The same flag is accepted by `publish`, but all ordinary authorization, exact
+leases and publication gates remain required. Offline shallow checks do not
+qualify real publication or the GitHub HTTPS seam.
 
 ## Scope and refusal policy
 
@@ -206,7 +294,9 @@ language context. Per-user temporary forms include a username followed by a
 numeric identifier and the numeric user-directory form under the temporary root.
 The word-followed-by-digits rule is conservative: ordinary temporary names such
 as `build-2024` also trigger it, including beneath `var/tmp` and in URL-shaped
-text containing the same temporary path. Review such product examples through
+text containing the same temporary path. The rule matches any slash-delimited
+`tmp` path segment, including a relative project directory, rather than only a
+temporary root. Review such product examples through
 the exact-record hygiene exceptions described below; no exception is automatic.
 The module inspected the existing packet scanner's product guard conventions;
 it imports no private pattern inventory and shares no internal code.
@@ -313,6 +403,8 @@ counts admitted hygiene records. `commits`, `signatures`, `messages`, `headers`,
 `added_lines` describe the completed or partially processed scope. `published_refs`
 is positive only after a successful push. `commands` and `command_bytes` account
 for native invocations and captured stdout/stderr bytes; no child output is exposed.
+`command_bytes` measures actual captured bytes and may vary between otherwise
+identical invocations; it is not a stable result identifier.
 
 Exit 0 means a completed clean check or a successful explicitly requested push.
 Exit 1 means blocking hits or any scan, signature, lease, publication or cleanup
@@ -330,6 +422,14 @@ if it refuses, TMPDIR is not checked. A counter covers any directory admission
 failure (including mode, ownership, symlink, missing or non-clean absolute path),
 not only permissions. Other scan and signature failures leave these counters at
 zero. No error details are written to stderr.
+Both admission keys and `pool_limit_errors` are always emitted, including zero
+values, between `scan_errors` and `signature_errors`. The pool key is additive;
+existing fields, error exits and scan-failure semantics remain unchanged. Consumers
+decoding known fields can continue using `scan_errors` and `completed`; consumers
+comparing exact JSON bytes or rejecting unknown fields must admit the new integer
+key. The separate `tails` output adds safe-scope coverage fields described in
+[TAILS.md](TAILS.md); strict consumers must admit those fields. No separate unknown-base
+counter is introduced; that failure remains generic.
 
 | Resource | Fixed maximum |
 | --- | ---: |

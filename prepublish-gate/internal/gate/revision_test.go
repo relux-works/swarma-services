@@ -406,15 +406,16 @@ func TestGHConfigDirectoryAdmissionNeighbors(t *testing.T) {
 			t.Fatal("chmod")
 		}
 		r, code := run(c)
-		require(t, code == 2 && r.ArgumentErrors == 1 && r.Commands == 0, r, code)
+		require(t, code == 2 && r == (Report{ArgumentErrors: 1}), r, code)
 	}
 	if os.Chmod(private, 0700) != nil {
 		t.Fatal("chmod")
 	}
-	for _, name := range []string{"relative", private + "/../client", filepath.Join(f.dir, "missing")} {
+	t.Chdir(f.dir)
+	for _, name := range []string{"client", private + "/../client", private + "/", filepath.Join(f.dir, "missing")} {
 		c.GHConfig = name
 		r, code := run(c)
-		require(t, code == 2 && r.ArgumentErrors == 1 && r.Commands == 0, r, code)
+		require(t, code == 2 && r == (Report{ArgumentErrors: 1}), r, code)
 	}
 	link := filepath.Join(f.dir, "client-link")
 	if os.Symlink(private, link) != nil {
@@ -422,7 +423,7 @@ func TestGHConfigDirectoryAdmissionNeighbors(t *testing.T) {
 	}
 	c.GHConfig = link
 	r, code := run(c)
-	require(t, code == 2 && r.ArgumentErrors == 1 && r.Commands == 0, r, code)
+	require(t, code == 2 && r == (Report{ArgumentErrors: 1}), r, code)
 }
 
 func TestRegexCompiledBudgetAdjacentBoundary(t *testing.T) {

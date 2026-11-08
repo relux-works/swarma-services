@@ -30,6 +30,7 @@ type Report struct {
 	PublishedRefs         int `json:"published_refs"`
 	ArgumentErrors        int `json:"argument_errors"`
 	ScanErrors            int `json:"scan_errors"`
+	PoolLimitErrors       int `json:"pool_limit_errors"`
 	HomeAdmissionErrors   int `json:"home_admission_errors"`
 	TmpdirAdmissionErrors int `json:"tmpdir_admission_errors"`
 	SignatureErrors       int `json:"signature_errors"`
@@ -55,7 +56,7 @@ type Config struct {
 	Objects, Base, Candidate, Patterns, Exceptions, Signers, Principal string
 	Remote, Repository, GHConfig, DefaultRef                           string
 	Updates                                                            []string
-	Publish, LocalDestination                                          bool
+	Publish, LocalDestination, ShallowBase                             bool
 }
 
 // Run is the sole CLI boundary: every emitted value is a count, even on error.
@@ -81,6 +82,7 @@ func Run(args []string, out io.Writer) (code int) {
 	var u updates
 	f.StringVar(&c.Objects, "objects", "", "")
 	f.StringVar(&c.Base, "base", "", "")
+	f.BoolVar(&c.ShallowBase, "shallow-base", false, "")
 	f.StringVar(&c.Candidate, "candidate", "", "")
 	f.StringVar(&c.Patterns, "patterns", "", "")
 	f.StringVar(&c.Exceptions, "exceptions", "", "")
@@ -167,11 +169,17 @@ func Execute(ctx context.Context, c Config) (r Report, code int) {
 	p.ctx = ctx
 	g := &runner{ctx: ctx, dir: filepath.Join(state, "repo.git"), home: home, tmp: state}
 	defer func() { r.Commands = g.commands; r.CommandBytes = g.total }()
-	if g.snapshot(c.Objects) != nil {
+	if e = g.snapshot(c.Objects); e != nil {
+		if e == poolLimitFailure {
+			r.PoolLimitErrors = 1
+		}
 		r.ScanErrors = 1
 		return
 	}
-	if g.inventory() != nil {
+	if e = g.inventory(); e != nil {
+		if e == poolLimitFailure {
+			r.PoolLimitErrors = 1
+		}
 		r.ScanErrors = 1
 		return
 	}
@@ -180,7 +188,16 @@ func Execute(ctx context.Context, c Config) (r Report, code int) {
 		r.SignatureErrors = 1
 		return
 	}
-	// fsck rejects corrupt object IDs and incomplete closure, including baseline.
+	// Only explicit opt-in may end ancestry at the exact trusted baseline.
+	// No source shallow file is imported. fsck still validates every stored
+	// object and the complete baseline/candidate trees; history must reach base.
+	if c.ShallowBase {
+		if os.WriteFile(filepath.Join(g.dir, "shallow"), []byte(c.Base+"\n"), 0600) != nil {
+			r.ScanErrors = 1
+			return
+		}
+	}
+	// fsck rejects corrupt object IDs and incomplete closure within that scope.
 	// Ignore neither its exit code nor its bounded, redacted diagnostic stream.
 	if _, e = g.git("fsck", "--strict", "--no-reflogs", "--no-dangling", c.Base, c.Candidate); e != nil {
 		r.ScanErrors = 1

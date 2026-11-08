@@ -52,14 +52,17 @@ type Failure struct {
 	Milliseconds int64  `json:"milliseconds"`
 }
 type Worktree struct {
-	PathHash       string `json:"path_sha256"`
-	Head           string `json:"head,omitempty"`
-	Detached       bool   `json:"detached"`
-	Selected       bool   `json:"selected"`
-	Dirty          *bool  `json:"tracked_dirty"`
-	AnyDirty       *bool  `json:"dirty"`
-	UntrackedCount *int   `json:"untracked_count"`
-	Untracked      string `json:"untracked_coverage"`
+	PathHash        string `json:"path_sha256"`
+	Head            string `json:"head,omitempty"`
+	Detached        bool   `json:"detached"`
+	Selected        bool   `json:"selected"`
+	Dirty           *bool  `json:"tracked_dirty"`
+	SafeDirty       *bool  `json:"safe_tracked_dirty"`
+	TrackedCoverage string `json:"tracked_coverage"`
+	ExcludedTracked int    `json:"excluded_tracked_paths"`
+	AnyDirty        *bool  `json:"dirty"`
+	UntrackedCount  *int   `json:"untracked_count"`
+	Untracked       string `json:"untracked_coverage"`
 }
 type Ref struct {
 	NameHash string `json:"ref_sha256"`
@@ -802,7 +805,7 @@ func scanRepo(run *runner, locations []location, selected map[string]bool) Repos
 		s := string(field)
 		if strings.HasPrefix(s, "worktree ") {
 			p := strings.TrimPrefix(s, "worktree ")
-			r.Worktrees = append(r.Worktrees, Worktree{PathHash: hash(p), Selected: selected[p], Untracked: "not_scanned"})
+			r.Worktrees = append(r.Worktrees, Worktree{PathHash: hash(p), Selected: selected[p], Untracked: "not_scanned", TrackedCoverage: "not_scanned"})
 			wt = &r.Worktrees[len(r.Worktrees)-1]
 			if !selected[p] {
 				issue(&r, "unselected_worktree")
@@ -827,40 +830,19 @@ func scanRepo(run *runner, locations []location, selected map[string]bool) Repos
 			issue(&r, "tracked_paths")
 			continue
 		}
-		unsafe := false
-		tracked, submodules := map[string]bool{}, map[string]bool{}
-		rows := bytes.Split(names, []byte{0})
-		if len(rows) > MaxRows {
-			issue(&r, "tracked_path_bound")
+		headPaths, e := run.git(v.path, "head_paths", "ls-tree", "-r", "--full-tree", "-z", "HEAD")
+		if e != nil {
+			r.Failures = append(r.Failures, *e)
+			issue(&r, "head_paths")
 			continue
 		}
-		for _, row := range rows {
-			if len(row) == 0 {
-				continue
-			}
-			a := bytes.SplitN(row, []byte{'\t'}, 2)
-			if len(a) != 2 {
-				unsafe = true
-				continue
-			}
-			mode := strings.Fields(string(a[0]))
-			if len(mode) != 3 || !oidRE.MatchString(mode[1]) || (mode[0] != "100644" && mode[0] != "100755" && mode[0] != "120000" && mode[0] != "160000") {
-				unsafe = true
-				continue
-			}
-			p := string(a[1])
-			if sensitive(p) || len(p) > 4096 || filepath.IsAbs(p) || p == ".." || strings.HasPrefix(p, "../") {
-				unsafe = true
-			}
-			tracked[p] = true
-			if bytes.HasPrefix(a[0], []byte("160000 ")) {
-				submodules[p] = true
-			}
+		tracked, submodules, safe, excludedTracked, selectionErr := trackedSelection(v.path, names, headPaths)
+		if selectionErr != nil {
+			issue(&r, selectionErr.Error())
+			continue
 		}
-
-		if unsafe {
+		if excludedTracked > 0 {
 			issue(&r, "excluded_tracked_path")
-			continue
 		}
 		head, e := run.git(v.path, "head_before", "rev-parse", "--verify", "HEAD")
 		if e != nil {
@@ -868,7 +850,7 @@ func scanRepo(run *runner, locations []location, selected map[string]bool) Repos
 			issue(&r, "unborn_or_unavailable_head")
 			continue
 		}
-		status, e := run.git(v.path, "tracked_status", "status", "--porcelain=v1", "-z", "--untracked-files=no", "--ignore-submodules=all")
+		status, e := trackedStatus(run, v.path, "tracked_status", safe, excludedTracked)
 		if e != nil {
 			r.Failures = append(r.Failures, *e)
 			issue(&r, "tracked_status")
@@ -890,7 +872,15 @@ func scanRepo(run *runner, locations []location, selected map[string]bool) Repos
 		for i := range r.Worktrees {
 			if r.Worktrees[i].PathHash == hash(v.path) {
 				w := &r.Worktrees[i]
-				w.Dirty = &dirty
+				w.SafeDirty = &dirty
+				w.ExcludedTracked = excludedTracked
+				w.TrackedCoverage = "complete_safe_scope"
+				if excludedTracked > 0 {
+					w.TrackedCoverage = "partial_exclusions"
+				}
+				if dirty || excludedTracked == 0 {
+					w.Dirty = &dirty
+				}
 				if uf == nil {
 					w.UntrackedCount = &n
 					w.Untracked = "complete_safe_scope"
@@ -899,18 +889,26 @@ func scanRepo(run *runner, locations []location, selected map[string]bool) Repos
 					}
 				}
 				anyDirty := dirty || uf == nil && n > 0
-				if anyDirty || uf == nil && !excluded {
+				if anyDirty || uf == nil && !excluded && excludedTracked == 0 {
 					w.AnyDirty = &anyDirty
 				}
 			}
 		}
-		statusAfter, se := run.git(v.path, "status_after", "status", "--porcelain=v1", "-z", "--untracked-files=no", "--ignore-submodules=all")
+		statusAfter, se := trackedStatus(run, v.path, "status_after", safe, excludedTracked)
 		if se != nil {
 			r.Failures = append(r.Failures, *se)
 			issue(&r, "status_after")
 		} else if !bytes.Equal(status, statusAfter) {
 			r.Race = true
 			issue(&r, "status_race")
+		}
+		indexAfter, ie := run.git(v.path, "tracked_paths_after", "ls-files", "--stage", "-z")
+		if ie != nil {
+			r.Failures = append(r.Failures, *ie)
+			issue(&r, "tracked_paths_after")
+		} else if !bytes.Equal(names, indexAfter) {
+			r.Race = true
+			issue(&r, "index_race")
 		}
 		after, e := run.git(v.path, "head_after", "rev-parse", "--verify", "HEAD")
 		if e != nil {
@@ -920,6 +918,15 @@ func scanRepo(run *runner, locations []location, selected map[string]bool) Repos
 		if !bytes.Equal(head, after) {
 			r.Race = true
 			issue(&r, "head_race")
+		}
+		if se != nil || ie != nil || e != nil || !bytes.Equal(status, statusAfter) || !bytes.Equal(names, indexAfter) || !bytes.Equal(head, after) {
+			for i := range r.Worktrees {
+				if r.Worktrees[i].PathHash == hash(v.path) {
+					w := &r.Worktrees[i]
+					w.Dirty, w.SafeDirty, w.AnyDirty = nil, nil, nil
+					w.TrackedCoverage = "unstable_or_unavailable"
+				}
+			}
 		}
 	}
 	var stash []byte

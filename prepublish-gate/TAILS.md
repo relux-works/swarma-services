@@ -70,12 +70,25 @@ reflog-only commits are outside the ancestry scope; stash entries are counted
 separately. Branches with the same OID remain distinct branches; absent commits
 are deduplicated across branches and detached worktree heads.
 
-`tracked_dirty` is a nullable Boolean: null means not inspected or unavailable,
-false means the selected checkout had no tracked change at observation. `dirty`
+`tracked_dirty` is a nullable Boolean: null means not fully inspected or unavailable,
+false means the selected checkout had no tracked change at observation. A known
+change within admitted tracked paths makes it true even with exclusions. `dirty`
 combines tracked and untracked state, remaining null when exclusions prevent a
 clean assertion. A known tracked/untracked change makes it true even when another
 part of the scope is incomplete. `untracked_count` is a lower bound with partial
 coverage, or an exact count within `complete_safe_scope`.
+
+Each worktree also has `safe_tracked_dirty`, `tracked_coverage` and
+`excluded_tracked_paths`. These are additive version 1 fields; strict schema or
+exact-byte consumers must admit them. `safe_tracked_dirty` describes only the
+bounded admitted path set. `tracked_coverage` is `not_scanned`,
+`complete_safe_scope`, `partial_exclusions` or `unstable_or_unavailable`.
+`excluded_tracked_paths` counts distinct excluded paths in the union of HEAD and
+index metadata, including submodules and paths with unsafe filesystem metadata.
+It does not count or inspect the contents of an excluded directory. A false
+safe-scope result with exclusions leaves `tracked_dirty` and `dirty` null unless
+another observed change proves dirtiness. All-excluded selections skip Git status
+entirely; an empty path list must never mean an unrestricted scan.
 
 The tool walks only finite source filesystem metadata to assemble candidate paths;
 it reads no untracked file contents. Git receives that finite list on stdin to
@@ -85,8 +98,18 @@ in the child audit. Sensitive directories, nested checkouts and submodules are
 skipped before opening them and cause explicit incomplete coverage. `.git` metadata
 is excluded from untracked enumeration by definition. A clean assertion is limited
 to the declared source/ignore scope, not the online repository. Dirty scans first
-inspect bounded index path metadata and refuse sensitive tracked paths before Git
-status can read their contents. The sensitive-name denylist is conservative, not a
+inspect bounded HEAD and index path metadata, omit sensitive paths and submodules,
+and pass only explicit literal admitted paths to Git status when exclusions
+exist. With no exclusions, all HEAD/index paths have passed the same admission
+checks, so full tracked status has exactly the admitted scope without a pathspec
+argument bound. Empty admitted sets still skip status. Including HEAD paths
+keeps staged deletions visible. The tool checks filesystem metadata without
+following symlinked ancestors and excludes special files. File/directory overlaps
+between HEAD and index refuse the status scope, since even a literal pathspec can
+select descendants. Malformed records, unavailable metadata and bounds remain
+incomplete with unknown dirty state. Exclusions retain `excluded_tracked_path`
+and incomplete coverage even when safe-scope evidence is available. No excluded
+tracked file content is read. The sensitive-name denylist is conservative, not a
 classifier for every possible private filename. Select only trusted source
 checkouts; this tool does not read credential files to classify them.
 
@@ -95,7 +118,7 @@ actual exit and elapsed milliseconds), a per-child timing/exit/byte audit, cache
 `remote_freshness="unknown_cached_only"`. No fetch timestamp is treated as proof
 of online freshness. Missing/corrupt objects, unavailable refs, shallow history,
 bounds, unsupported storage/configuration and child timeouts remain incomplete.
-Refs, worktree records, selected HEADs and tracked status are observed twice;
+Refs, worktree records, selected HEADs, index path records and tracked status are observed twice;
 changes and existing Git lock files flag a race. This is best-effort race detection,
 not a transactional snapshot: concurrent changes that return to the same observed
 state may be missed. Keep inputs quiescent; a changing checkout cannot prove a
@@ -179,6 +202,7 @@ retain their exclusions. No other identity's credentials, caches or session reco
 | Each metadata file / total metadata file sizes | 64 MiB / 256 MiB |
 | Config, pointer or PR metadata file | 2 MiB |
 | Ref/worktree/commit/stash/index-path rows | 4096 per inventory kind |
+| Union of HEAD/index paths / pathspec bytes when exclusions require a list | 4095 / 64 KiB |
 | Git children / total observed child output | 1024 / 16 MiB |
 | Each child stdout and stderr | 2 MiB each |
 | Each child / pipe drain grace | 3 seconds / 250 milliseconds |

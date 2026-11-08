@@ -58,12 +58,20 @@ func TestPrivateDirectoryAdmissionReport(t *testing.T) {
 			t.Setenv("HOME", home)
 			t.Setenv("TMPDIR", tmp)
 			p := os.Getenv(variable)
-			for _, kind := range []string{"permissions", "symlink", "missing", "relative", "unclean"} {
+			for _, kind := range []string{"permissions", "mode-0500", "symlink", "missing", "relative", "unclean", "trailing-slash", "regular-file"} {
 				t.Run(kind, func(t *testing.T) {
+					// Establish a working neighbor before changing exactly one input.
+					r, code := admissionCLI(t, f.config())
+					require(t, code == 0 && r.Completed == 1 && r.HomeAdmissionErrors == 0 &&
+						r.TmpdirAdmissionErrors == 0, r, code)
 					bad := p
 					switch kind {
-					case "permissions":
-						if os.Chmod(p, 0755) != nil {
+					case "permissions", "mode-0500":
+						mode := os.FileMode(0755)
+						if kind == "mode-0500" {
+							mode = 0500
+						}
+						if os.Chmod(p, mode) != nil {
 							t.Fatal("fixture permissions")
 						}
 						t.Cleanup(func() {
@@ -79,12 +87,24 @@ func TestPrivateDirectoryAdmissionReport(t *testing.T) {
 					case "missing":
 						bad = filepath.Join(root, "missing")
 					case "relative":
+						t.Chdir(root)
 						bad = "relative-fixture"
+						if os.Mkdir(bad, 0700) != nil || !privateDir(filepath.Join(root, bad)) {
+							t.Fatal("existing private relative fixture")
+						}
 					case "unclean":
 						bad = p + "/."
+					case "trailing-slash":
+						bad = p + "/"
+					case "regular-file":
+						bad = filepath.Join(root, "regular-file")
+						write(t, bad, []byte("neutral\n"))
+						if os.Chmod(bad, 0700) != nil {
+							t.Fatal("fixture file permissions")
+						}
 					}
 					t.Setenv(variable, bad)
-					r, code := admissionCLI(t, f.config())
+					r, code = admissionCLI(t, f.config())
 					h, tmpErrors := 0, 0
 					if variable == "HOME" {
 						h = 1
@@ -101,6 +121,61 @@ func TestPrivateDirectoryAdmissionReport(t *testing.T) {
 				r.ScanErrors == 0 && r.HomeAdmissionErrors == 0 && r.TmpdirAdmissionErrors == 0, r, code)
 		})
 	}
+}
+
+// When both directories fail admission, only HOME's counter is reported.
+func TestPrivateDirectoryAdmissionHomeFirst(t *testing.T) {
+	f := newFixture(t)
+	for _, kind := range []string{"permissions", "trailing-slash"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			home, tmp := filepath.Join(root, "home"), filepath.Join(root, "temporary")
+			for _, p := range []string{home, tmp} {
+				if os.Mkdir(p, 0700) != nil {
+					t.Fatal("fixture directory")
+				}
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("TMPDIR", tmp)
+			r, code := admissionCLI(t, f.config())
+			require(t, code == 0 && r.Completed == 1, r, code)
+			if kind == "permissions" {
+				for _, p := range []string{home, tmp} {
+					if os.Chmod(p, 0755) != nil {
+						t.Fatal("fixture permissions")
+					}
+				}
+			} else {
+				t.Setenv("HOME", home+"/")
+				t.Setenv("TMPDIR", tmp+"/")
+			}
+			r, code = admissionCLI(t, f.config())
+			require(t, code == 1 && r == (Report{ScanErrors: 1, HomeAdmissionErrors: 1}), r, code)
+		})
+	}
+}
+
+// The optional read-only mount is supplied by the outer offline sandbox. No
+// production fault seam or privilege is needed to reach MkdirTemp's failure.
+func TestMkdirTempFailureDoesNotRelabelAdmission(t *testing.T) {
+	readonly := os.Getenv("PREPUBLISH_READONLY_TMPDIR")
+	if os.Getenv("PREPUBLISH_VERIFY_SANDBOX") != "1" || readonly == "" {
+		t.Skip("requires an explicit read-only directory fixture")
+	}
+	f := newFixture(t)
+	if !privateDir(readonly) {
+		t.Fatal("read-only fixture must pass directory admission")
+	}
+	// Verify the failure precondition before exercising the report boundary.
+	if p, e := os.MkdirTemp(readonly, "probe-"); e == nil {
+		os.Remove(p)
+		t.Fatal("fixture is writable")
+	}
+	r, code := admissionCLI(t, f.config())
+	require(t, code == 0 && r.Completed == 1, r, code)
+	t.Setenv("TMPDIR", readonly)
+	r, code = admissionCLI(t, f.config())
+	require(t, code == 1 && r == (Report{ScanErrors: 1}), r, code)
 }
 
 func TestAdmissionCountersDoNotRelabelOtherFailures(t *testing.T) {

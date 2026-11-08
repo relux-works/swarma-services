@@ -558,7 +558,7 @@ func TestCLIArgumentBytesNeverEscape(t *testing.T) {
 }
 func TestSandboxExcludesCredentialsAndSocket(t *testing.T) {
 	if os.Getenv("PREPUBLISH_VERIFY_SANDBOX") != "1" {
-		t.Skip("explicit producer sandbox verification only")
+		t.Skip("requires an explicit Linux isolation fixture")
 	}
 	if os.Getenv("SSH_AUTH_SOCK") != "" || os.Getenv("GH_CONFIG_DIR") != "" || os.Getenv("GITHUB_TOKEN") != "" {
 		t.Fatal("sandbox inherited authorization")

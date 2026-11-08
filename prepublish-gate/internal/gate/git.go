@@ -142,7 +142,7 @@ func (g *runner) snapshot(objects string) error {
 		}
 		files++
 		if files > MaxObjectFiles {
-			return refused
+			return poolLimitFailure
 		}
 		// Never read or copy these derived indexes/retention markers. The private
 		// repository rebuilds its own view from copied objects. Links still refuse.
@@ -153,10 +153,13 @@ func (g *runner) snapshot(objects string) error {
 		if !looseRE.MatchString(rel) && !packRE.MatchString(rel) {
 			return refused
 		}
-		total += before.Size()
-		if total > MaxObjects || files > MaxObjectFiles || before.Size() < 0 {
+		if before.Size() < 0 {
 			return refused
 		}
+		if before.Size() > MaxObjects-total {
+			return poolLimitFailure
+		}
+		total += before.Size()
 		f, e := os.Open(name)
 		if e != nil {
 			return refused
@@ -207,7 +210,7 @@ func (g *runner) inventory() error {
 	}
 	rows := bytes.Split(b[:len(b)-1], []byte{'\n'})
 	if len(rows) > 65536 {
-		return refused
+		return poolLimitFailure
 	}
 	total := int64(0)
 	seen := map[string]bool{}
@@ -229,8 +232,11 @@ func (g *runner) inventory() error {
 		default:
 			return refused
 		}
-		if n > limit || n > MaxObjects-total {
+		if n > limit {
 			return refused
+		}
+		if n > MaxObjects-total {
+			return poolLimitFailure
 		}
 		total += n
 	}
