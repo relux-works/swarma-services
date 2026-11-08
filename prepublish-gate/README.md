@@ -35,6 +35,25 @@ a fresh private 0700 absolute HOME, TMPDIR and cache, and no host home, keys,
 agent sockets, credentials or borrowed caches. OpenSSH fixture generation needs a
 synthetic passwd/group entry for the invoking UID. All test signing keys are fresh,
 task-local and removed with their temporary directories. Use an outer hard timeout.
+The full suite exercises tails' production directory admission: supply HOME and
+TMPDIR with no symlink components or trailing slash, each at mode 0700. This is
+stricter than gate's ancestor-symlink admission described below. On systems where
+the default temporary path contains an alias, create a dedicated private directory
+and export its physical path, for example:
+
+```sh
+private_tmp=$(mktemp -d "${TMPDIR:-/tmp}/prepublish-checks.XXXXXXXX")
+chmod 700 "$private_tmp"
+TMPDIR=$(cd "$private_tmp" && pwd -P)
+export TMPDIR
+```
+
+Supply a separate physical private HOME as well. Merely stripping a trailing slash
+does not resolve an ancestor symlink. The tails fixtures resolve their own temporary
+roots to match Git's worktree paths; this does not relax admission of caller-supplied
+paths. The TMPDIR regression explicitly clears GOTMPDIR before creating its fixture,
+because Go 1.26 TempDir otherwise prefers GOTMPDIR. Its separate ambient controls
+cover physical and symlinked GOTMPDIR directories.
 The command itself is not an OS sandbox. The environment assertions are opt-in:
 run `PREPUBLISH_VERIFY_SANDBOX=1 go test -run TestSandboxExcludesCredentialsAndSocket ./internal/gate`
 inside that sandbox. Ordinary product tests do not claim to qualify their host.

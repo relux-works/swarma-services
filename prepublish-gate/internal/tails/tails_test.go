@@ -14,7 +14,12 @@ import (
 
 func fixture(t *testing.T) (string, string) {
 	t.Helper()
-	root := t.TempDir()
+	// Git reports resolved worktree paths. Resolve the fixture root as well,
+	// including when the test runner's TMPDIR has a symlink ancestor.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo := filepath.Join(root, "repo")
 	git(t, root, "init", "-b", "main", repo)
 	git(t, repo, "config", "user.name", "Fixture")
@@ -23,6 +28,87 @@ func fixture(t *testing.T) (string, string) {
 	git(t, repo, "add", "file")
 	git(t, repo, "commit", "-m", "base")
 	return root, repo
+}
+
+// A symlinked temporary-directory ancestor must not prevent the fixture from
+// reaching real status observations. Caller-supplied aliases still fail closed.
+func TestFixtureCanonicalPaths(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical := filepath.Join(parent, "physical")
+	alias := filepath.Join(parent, "alias")
+	if err := os.Mkdir(physical, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Fatal(err)
+	}
+	// Keep a separate ambient Go temporary directory: it must not redirect
+	// the fixture away from the TMPDIR spelling this regression exercises.
+	goPhysical := filepath.Join(parent, "go-physical")
+	goAlias := filepath.Join(parent, "go-alias")
+	if err := os.Mkdir(goPhysical, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(goPhysical, goAlias); err != nil {
+		t.Fatal(err)
+	}
+	for _, goKind := range []string{"physical", "symlink"} {
+		t.Run("gotmpdir-"+goKind, func(t *testing.T) {
+			goTmp := goPhysical
+			if goKind == "symlink" {
+				goTmp = goAlias
+			}
+			t.Setenv("GOTMPDIR", goTmp)
+			t.Run("ambient-neighbor", func(t *testing.T) {
+				root, err := filepath.EvalSymlinks(t.TempDir())
+				if err != nil || !inside(root, goPhysical) {
+					t.Fatal("ambient GOTMPDIR did not select its own temporary root")
+				}
+			})
+			for _, kind := range []string{"direct", "symlink"} {
+				t.Run(kind, func(t *testing.T) {
+					tmp := physical
+					if kind == "symlink" {
+						tmp = alias
+					}
+					t.Setenv("TMPDIR", tmp)
+					// Go 1.26 TempDir prefers GOTMPDIR; measure TMPDIR explicitly.
+					t.Setenv("GOTMPDIR", "")
+					root, repo := fixture(t)
+					resolved, err := filepath.EvalSymlinks(root)
+					if err != nil || root != resolved || !inside(root, physical) {
+						t.Fatal("fixture did not return its resolved private root")
+					}
+					if repo != git(t, repo, "rev-parse", "--show-toplevel") {
+						t.Fatal("fixture and Git disagree on the repository path")
+					}
+					// Public Scan still requires a canonical runtime TMPDIR. Only the
+					// fixture was created through the alias; do not relax that gate.
+					t.Setenv("TMPDIR", physical)
+					git(t, repo, "update-ref", "refs/remotes/origin/main", git(t, repo, "rev-parse", "HEAD"))
+					r := Scan(Options{Repos: []string{repo}})
+					if len(r.Repositories) != 1 || len(r.Repositories[0].Worktrees) != 1 {
+						t.Fatal("missing canonical worktree observation")
+					}
+					w := r.Repositories[0].Worktrees[0]
+					if !r.Complete || w.SafeDirty == nil || *w.SafeDirty {
+						t.Fatal("canonical fixture did not reach clean status")
+					}
+					rel, err := filepath.Rel(physical, repo)
+					if err != nil {
+						t.Fatal(err)
+					}
+					r = Scan(Options{Repos: []string{filepath.Join(alias, rel)}})
+					if r.Complete || r.Commands != 0 || len(r.Failures) != 1 || r.Failures[0].Kind != "unsafe_path" || len(r.Repositories) != 0 {
+						t.Fatal("unresolved caller alias did not fail with unsafe_path before Git")
+					}
+				})
+			}
+		})
+	}
 }
 func write(t *testing.T, p, s string) {
 	t.Helper()
@@ -319,7 +405,11 @@ func TestUntrackedIgnoreAndExcludedDirectory(t *testing.T) {
 }
 
 func TestUnbornAndMissingStashReflog(t *testing.T) {
-	root := t.TempDir()
+	// Resolve only this test's owned root, including an ambient GOTMPDIR alias.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo := filepath.Join(root, "unborn")
 	git(t, root, "init", "-b", "main", repo)
 	r := Scan(Options{Repos: []string{repo}})
