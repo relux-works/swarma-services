@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -146,7 +147,7 @@ func TestExcludedTrackedDirtyNeighbors(t *testing.T) {
 // Ancestor redirects and file/directory overlaps must not broaden a literal
 // pathspec into excluded descendants. A neutral sibling remains usable.
 func TestTrackedSelectionUnsafeNeighbors(t *testing.T) {
-	for _, kind := range []string{"valid", "symlink-ancestor", "overlap", "unmerged", "duplicate-stage", "malformed", "argument-bound"} {
+	for _, kind := range []string{"valid", "symlink-ancestor", "overlap", "unmerged", "duplicate-stage", "malformed", "large-admitted", "argument-bound"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			oid := strings.Repeat("1", 40)
@@ -166,22 +167,97 @@ func TestTrackedSelectionUnsafeNeighbors(t *testing.T) {
 				index = append(index, index...)
 			case "malformed":
 				index = []byte("100644 " + oid + " 0\t../outside\x00")
-			case "argument-bound":
+			case "large-admitted", "argument-bound":
+				// Each component is short; the absent first component admits the
+				// path without relying on an OS name-length error. Only the
+				// explicit sensitive row below makes the byte bound applicable.
 				for i := 0; i < 20; i++ {
-					index = append(index, []byte("100644 "+oid+" 0\t"+strings.Repeat(string(rune('a'+i)), 4000)+"\x00")...)
+					component := strings.Repeat(string(rune('a'+i)), 199)
+					name := strings.Join(slices.Repeat([]string{component}, 20), "/")
+					index = append(index, []byte("100644 "+oid+" 0\t"+name+"\x00")...)
+				}
+				if kind == "argument-bound" {
+					index = append(index, []byte("100644 "+oid+" 0\t.env.fixture\x00")...)
 				}
 			}
 			_, _, safe, excluded, e := trackedSelection(root, index, head)
-			if kind == "valid" || kind == "symlink-ancestor" || kind == "unmerged" {
-				wantExcluded := 0
+			if kind == "valid" || kind == "symlink-ancestor" || kind == "unmerged" || kind == "large-admitted" {
+				wantExcluded, wantSafe := 0, 1
 				if kind == "symlink-ancestor" {
 					wantExcluded = 1
 				}
-				if e != nil || len(safe) != 1 || safe[0] != "file" || excluded != wantExcluded {
+				if kind == "large-admitted" {
+					wantSafe = 21
+				}
+				if e != nil || len(safe) != wantSafe || !slices.Contains(safe, "file") || excluded != wantExcluded {
 					t.Fatal("valid neighbor or ancestor exclusion lost")
 				}
+			} else if kind == "argument-bound" && (e == nil || e.Error() != "tracked_pathspec_bound") {
+				t.Fatal("explicit exclusion did not enforce pathspec byte bound")
 			} else if e == nil {
 				t.Fatal("ambiguous or unbounded evidence admitted")
+			}
+		})
+	}
+}
+
+// Observe argv at the Git seam: successful status alone cannot prove that
+// pathspec bytes stay constant when every tracked path is admitted.
+func TestTrackedStatusPathspecArgv(t *testing.T) {
+	for _, exclusions := range []bool{false, true} {
+		t.Run(fmt.Sprintf("exclusions=%t", exclusions), func(t *testing.T) {
+			root, repo := fixture(t)
+			for _, name := range []string{"space name.txt", ":(glob)*"} {
+				write(t, filepath.Join(repo, name), "neutral fixture\n")
+				git(t, repo, "--literal-pathspecs", "add", "--", name)
+			}
+			if exclusions {
+				write(t, filepath.Join(repo, ".env.fixture"), "excluded fixture\n")
+				git(t, repo, "add", ".env.fixture")
+			}
+			git(t, repo, "commit", "-m", "status argv fixture")
+			git(t, repo, "update-ref", "refs/remotes/origin/main", git(t, repo, "rev-parse", "HEAD"))
+			argv, fake := filepath.Join(root, "status-argv"), filepath.Join(root, "fake-git")
+			// NUL records preserve whitespace and literal pathspec spelling.
+			// An extra NUL separates complete invocations, including both passes.
+			write(t, fake, "#!/bin/sh\nfor arg do\nif [ \"$arg\" = status ]; then\nprintf '%s\\0' \"$@\" >> '"+argv+"'\nprintf '\\0' >> '"+argv+"'\nbreak\nfi\ndone\nexec /usr/bin/git \"$@\"\n")
+			if os.Chmod(fake, 0700) != nil {
+				t.Fatal("fixture executable")
+			}
+			report := Report{}
+			l := location{path: repo, db: filepath.Join(repo, ".git"), gitdir: filepath.Join(repo, ".git")}
+			run := runner{ctx: context.Background(), timeout: time.Second, report: &report, executable: fake, locations: map[string]location{repo: l}}
+			r := scanRepo(&run, []location{l}, map[string]bool{repo: true})
+			if len(r.Failures) != 0 || len(r.Worktrees) != 1 || r.Worktrees[0].SafeDirty == nil || *r.Worktrees[0].SafeDirty {
+				t.Fatal("status argv witness did not complete both clean observations")
+			}
+			var stages []string
+			for _, child := range report.Children {
+				if child.Stage == "tracked_status" || child.Stage == "status_after" {
+					stages = append(stages, child.Stage)
+				}
+			}
+			if !slices.Equal(stages, []string{"tracked_status", "status_after"}) {
+				t.Fatal("missing first or follow-up status")
+			}
+			b, e := os.ReadFile(argv)
+			if e != nil || !bytes.HasSuffix(b, []byte{0, 0}) {
+				t.Fatal("missing complete argv records")
+			}
+			calls := bytes.Split(b[:len(b)-2], []byte{0, 0})
+			if len(calls) != 2 {
+				t.Fatal("expected exactly two status invocations")
+			}
+			want := []string{"--literal-pathspecs", "status", "--porcelain=v1", "-z", "--untracked-files=no", "--ignore-submodules=all", "--no-renames"}
+			if exclusions {
+				want = append(want, "--", ":(glob)*", "file", "space name.txt")
+			}
+			for i, call := range calls {
+				args := strings.Split(string(call), "\x00")
+				at := slices.Index(args, "--literal-pathspecs")
+				if at < 0 || !slices.Equal(args[at:], want) {
+					t.Fatalf("%s: unexpected status argv (exclusions=%t)", stages[i], exclusions)
+				}
 			}
 		})
 	}

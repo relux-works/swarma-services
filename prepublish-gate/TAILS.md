@@ -100,16 +100,18 @@ is excluded from untracked enumeration by definition. A clean assertion is limit
 to the declared source/ignore scope, not the online repository. Dirty scans first
 inspect bounded HEAD and index path metadata, omit sensitive paths and submodules,
 and pass only explicit literal admitted paths to Git status when exclusions
-exist. With no exclusions, all HEAD/index paths have passed the same admission
-checks, so full tracked status has exactly the admitted scope without a pathspec
+exist. With no exclusions and a quiescent index and filesystem metadata, all
+HEAD/index paths have passed the same admission checks, so full tracked status
+has exactly the admitted scope without a pathspec
 argument bound. Empty admitted sets still skip status. Including HEAD paths
 keeps staged deletions visible. The tool checks filesystem metadata without
 following symlinked ancestors and excludes special files. File/directory overlaps
 between HEAD and index refuse the status scope, since even a literal pathspec can
 select descendants. Malformed records, unavailable metadata and bounds remain
 incomplete with unknown dirty state. Exclusions retain `excluded_tracked_path`
-and incomplete coverage even when safe-scope evidence is available. No excluded
-tracked file content is read. The sensitive-name denylist is conservative, not a
+and incomplete coverage even when safe-scope evidence is available. With quiescent
+index and filesystem metadata, no excluded tracked file content is read.
+The sensitive-name denylist is conservative, not a
 classifier for every possible private filename. Select only trusted source
 checkouts; this tool does not read credential files to classify them.
 
@@ -123,6 +125,11 @@ changes and existing Git lock files flag a race. This is best-effort race detect
 not a transactional snapshot: concurrent changes that return to the same observed
 state may be missed. Keep inputs quiescent; a changing checkout cannot prove a
 negative. Re-run only by a separate operator decision after resolving uncertainty.
+In particular, a concurrent index addition can enter unrestricted status after
+admission, including a sensitive path. A later index comparison can invalidate
+the dirty evidence but cannot undo content reads. An explicit literal list also
+requires quiescent filesystem metadata: a listed file can become a directory
+whose descendants were not admitted. Race detection is not an access barrier.
 
 ## Offline open-PR metadata
 
