@@ -291,6 +291,10 @@ func originalGitStockFetch(t *testing.T, l *originalGitFixture, ignoreNoProgress
 }
 
 func originalGitStockFetchWindow(t *testing.T, l *originalGitFixture, ignoreNoProgress, zeroWindow bool) {
+	originalGitStockFetchHistory(t, l, ignoreNoProgress, zeroWindow, false)
+}
+
+func originalGitStockFetchHistory(t *testing.T, l *originalGitFixture, ignoreNoProgress, zeroWindow, beyondWindow bool) {
 	t.Helper()
 	dir := t.TempDir()
 	repo := dir + "/fixture.git"
@@ -323,7 +327,19 @@ func originalGitStockFetchWindow(t *testing.T, l *originalGitFixture, ignoreNoPr
 	fixtureString(&public, []byte("ssh-ed25519"))
 	fixtureString(&public, key.Public().(ed25519.PublicKey))
 	pub := public.Bytes()
-	l.raw = fixtureSign(t, []byte("tree "+tree+"\nauthor Fixture <fixture@example.invalid> 1740000000 +0000\ncommitter Fixture <fixture@example.invalid> 1740000000 +0000\n\nStock Git parent fixture.\n"), key, pub, "sha512")
+	var parent string
+	if beyondWindow {
+		l.r.policy.Profile.AncestryCommits = 1
+		// The requested two-generation window must cut real history, forcing
+		// upload-pack to emit shallow-info as well as the ordinary delta pack.
+		ancestor := []byte("tree " + tree + "\nauthor Fixture <fixture@example.invalid> 1739999999 +0000\ncommitter Fixture <fixture@example.invalid> 1739999999 +0000\n\nOutside the requested window.\n")
+		oid := strings.TrimSpace(string(setup(ancestor, "-C", repo, "hash-object", "-w", "-t", "commit", "--stdin")))
+		if oid != fixtureOID(ancestor) {
+			t.Fatal("stock Git changed ancestor identity")
+		}
+		parent = "parent " + oid + "\n"
+	}
+	l.raw = fixtureSign(t, []byte("tree "+tree+"\n"+parent+"author Fixture <fixture@example.invalid> 1740000000 +0000\ncommitter Fixture <fixture@example.invalid> 1740000000 +0000\n\nStock Git parent fixture.\n"), key, pub, "sha512")
 	l.q.Commit = fixtureOID(l.raw)
 	l.head = fixtureSign(t, []byte("tree "+tree+"\nparent "+l.q.Commit+"\nauthor Fixture <fixture@example.invalid> 1740000001 +0000\ncommitter Fixture <fixture@example.invalid> 1740000001 +0000\n\nStock Git descendant fixture.\n"), key, pub, "sha512")
 	l.r.policy.OwnerKeys = []OwnerKey{{Repository: l.r.policy.CanonicalRepository, Fingerprint: fixtureFingerprint(pub), PublicKey: pub}}
@@ -540,19 +556,45 @@ func TestOriginalGitHTTPV2AdvertisementNeighbors(t *testing.T) {
 }
 
 func TestOriginalGitShallowSuffixNeighbors(t *testing.T) {
-	for _, suffix := range []string{"\n", "X", "\r", "", "\r\n", "\x00"} {
+	for _, suffix := range []string{"\n", "", "X", "\r", "\r\n", "\n\n", "\nX", "\x00"} {
 		t.Run(strconv.Quote(suffix), func(t *testing.T) {
 			l := originalGitLab(t, func(l *originalGitFixture) {
 				prefix := originalGitPacket("shallow-info\n") + originalGitPacket("shallow "+l.q.Commit+suffix) + "0001"
 				l.fetch = append([]byte(prefix), l.fetch...)
 			})
 			got, err := l.r.ReadOriginalGitHubObjects(l.ctx, l.q)
-			if suffix == "\n" {
+			if suffix == "\n" || suffix == "" {
 				if err != nil || !bytes.Equal(got.Commit, l.raw) || l.requests.Load() != 4 {
 					t.Fatal("valid shallow neighbor refused", err)
 				}
-			} else if err == nil || got.Commit != nil || got.LandingPath != nil || got.Repository.Canonical != "" || l.requests.Load() != 3 {
-				t.Fatal("malformed shallow suffix reached material/ref refresh", err)
+			} else {
+				r, ok := err.(*Refusal)
+				if !ok || r.Predicate() != "github_git_shallow" || got.Commit != nil || got.LandingPath != nil || got.Repository.Canonical != "" || l.requests.Load() != 3 {
+					t.Fatal("malformed shallow suffix reached material/ref refresh", err)
+				}
+			}
+		})
+	}
+}
+
+func TestOriginalGitShallowOIDNeighbors(t *testing.T) {
+	for _, line := range []string{
+		"shallow " + strings.Repeat("a", 39),
+		"shallow " + strings.Repeat("a", 41),
+		"shallow " + strings.Repeat("A", 40),
+		"shallow " + strings.Repeat("a", 39) + "g",
+		"Shallow " + strings.Repeat("a", 40),
+		"shallow\t" + strings.Repeat("a", 40),
+	} {
+		t.Run(line, func(t *testing.T) {
+			l := originalGitLab(t, func(l *originalGitFixture) {
+				prefix := originalGitPacket("shallow-info\n") + originalGitPacket(line) + "0001"
+				l.fetch = append([]byte(prefix), l.fetch...)
+			})
+			got, err := l.r.ReadOriginalGitHubObjects(l.ctx, l.q)
+			r, ok := err.(*Refusal)
+			if !ok || r.Predicate() != "github_git_shallow" || got.Commit != nil || got.LandingPath != nil || got.Repository.Canonical != "" || l.requests.Load() != 3 {
+				t.Fatal("malformed shallow OID reached material/ref refresh", err)
 			}
 		})
 	}

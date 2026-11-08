@@ -36,13 +36,21 @@ issuance. The offline default-window stock-Git control inspects object headers
 to require an actual REF_DELTA, then verifies exact signed commits, trees, OIDs,
 ancestry and shared accounting. The older `pack.window=0` control covers only
 the explicitly limited non-delta subset. Neither control qualifies a live
-provider. Fresh independent whole-candidate review, an exact-head marker and
-pinned-dependency Linux CI must qualify this source revision before publication;
-the separate transport/phase integration obligations above still apply.
+provider. The shallow-history control extends beyond the requested deepen
+window and consumes stock Git's unmodified shallow-info and REF_DELTA together.
+Shallow OID lines accept no LF or exactly one LF; other suffixes refuse. The
+separate transport/phase integration obligations above still apply.
 
 This remains a bounded PARTIAL implementation with unreachable new readers.
 The public effective-checks port still refuses, no issuer or provider is
-installed, and the separate `q-gql-token` integration question remains open.
+installed. The credential type and minimum permissions for strict GraphQL
+never-edited checks remain an open integration question; no credential is
+admitted by this component.
+
+The inventory ceiling can refuse even a short merge-heavy window: Git's
+`deepen N` includes all parents within N generations, which can exceed the
+reader's commit-count ceiling. A shorter generation window does not guarantee
+that the returned inventory fits. Over-ceiling responses fail closed.
 
 The reader checks canonical installed repository/name, default HEAD symref and
 branch OID, exact requested object OID, raw pack and commit hashes, bounded real

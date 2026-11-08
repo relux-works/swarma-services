@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -98,11 +99,35 @@ func originalStockPackKinds(t *testing.T, wire []byte) []byte {
 }
 
 func TestOriginalGitDefaultWindowRawSignedAncestry(t *testing.T) {
-	l := originalGitLab(t, func(l *originalGitFixture) { originalGitStockFetchWindow(t, l, false, false) })
+	for _, beyondWindow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "complete-history", true: "shallow-history"}[beyondWindow], func(t *testing.T) {
+			originalGitDefaultWindowRawSignedAncestry(t, beyondWindow)
+		})
+	}
+}
+
+func originalGitDefaultWindowRawSignedAncestry(t *testing.T, beyondWindow bool) {
+	l := originalGitLab(t, func(l *originalGitFixture) { originalGitStockFetchHistory(t, l, false, false, beyondWindow) })
 	stock := l.stockFetch
 	var kinds []byte
 	l.stockFetch = func(request []byte) []byte {
 		wire := stock(request)
+		if beyondWindow {
+			// Inspect the unmodified exchange, before the production parser.
+			line, rest, control, err := originalGitNext(wire)
+			if err != nil || control != -1 || string(line) != "shallow-info\n" {
+				t.Fatal("stock Git did not cut history with shallow-info", err)
+			}
+			line, rest, control, err = originalGitNext(rest)
+			if err != nil || control != -1 || string(line) != "shallow "+l.q.Commit {
+				t.Fatal("expected exact stock shallow OID without LF", err)
+			}
+			_, _, control, err = originalGitNext(rest)
+			if err != nil || control != 1 {
+				t.Fatal("missing stock shallow delimiter", err)
+			}
+			t.Logf("stock shallow boundary: %s; wire SHA-256: %x", l.q.Commit, sha256.Sum256(wire))
+		}
 		kinds = originalStockPackKinds(t, wire)
 		if !bytes.Contains(kinds, []byte{7}) {
 			t.Error("default stock Git fixture did not emit REF_DELTA")
@@ -287,8 +312,8 @@ func TestOriginalGitDeltaPackResolution(t *testing.T) {
 			originalDeltaRefusal(t, got, err, tc.predicate)
 		})
 	}
-	// Exhaust each successive reservation, including delta output, without
-	// changing installed limits or granting a fresh reconstruction allowance.
+	// Exhaust the aggregate total at the last reservation. The separate exact
+	// resolution-reservation control below pins that earlier debit independently.
 	p := originalDeltaPhase(t)
 	if _, err := originalGitUnpack(p, pack, 4096, 2); err != nil {
 		t.Fatal(err)
@@ -352,16 +377,17 @@ func TestOriginalGitDeltaInstructions(t *testing.T) {
 	}
 	p := originalDeltaPhase(t)
 	p.bytesLeft = 1
-	if got, err := originalGitApplyDelta(p, base, originalDeltaLiteral(10, []byte("x")), 4096); err == nil || got != nil || p.bytesLeft != 1 {
-		t.Fatal("output allocation bypassed ledger")
+	got, err := originalGitApplyDelta(p, base, originalDeltaLiteral(10, []byte("x")), 4096)
+	originalDeltaBytesRefusal(t, got, err, "github_git_aggregate")
+	if p.bytesLeft != 1 {
+		t.Fatal("refused output reservation changed ledger")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	p = originalDeltaPhase(t)
 	p.ctx = ctx
-	if got, err := originalGitApplyDelta(p, base, originalDeltaLiteral(10, []byte("x")), 4096); err == nil || got != nil {
-		t.Fatal("canceled delta returned material")
-	}
+	got, err = originalGitApplyDelta(p, base, originalDeltaLiteral(10, []byte("x")), 4096)
+	originalDeltaBytesRefusal(t, got, err, "github_git_aggregate")
 }
 
 func TestOriginalGitDeltaCorruptionAndTruncation(t *testing.T) {
@@ -374,13 +400,30 @@ func TestOriginalGitDeltaCorruptionAndTruncation(t *testing.T) {
 	originalDeltaRefusal(t, got, err, "github_git_pack_hash")
 	// Every truncated prefix is refused even with a freshly correct pack hash.
 	// This covers object headers, base OIDs, delta headers, zlib data/trailers.
+	// Both fixture object sizes use exactly two pack-header bytes. Compute
+	// their compressed boundaries from a separately encoded single-object pack.
+	firstEnd := len(originalDeltaPack(t, originalDeltaEntry{1, "", a})) - 20
+	deltaStart := firstEnd + 2 + 20
+	if len(a) < 16 || len(a) >= 2048 || len(originalDeltaLiteral(len(a), b)) < 16 || len(originalDeltaLiteral(len(a), b)) >= 2048 {
+		t.Fatal("fixture no longer uses two-byte object headers")
+	}
 	for cut := 12; cut < len(pack)-20; cut++ {
 		prefix := append([]byte(nil), pack[:cut]...)
 		sum := sha1.Sum(prefix)
 		prefix = append(prefix, sum[:]...)
-		if got, err := originalGitUnpack(originalDeltaPhase(t), prefix, 4096, 2); err == nil || got != nil {
-			t.Fatalf("truncated pack prefix %d accepted", cut)
+		predicate := "github_git_incomplete_object"
+		switch {
+		case cut < 14, cut >= firstEnd && cut < firstEnd+2:
+			predicate = "github_git_pack"
+		case cut < 16, cut >= deltaStart && cut < deltaStart+2:
+			predicate = "github_git_zlib"
+		case cut >= firstEnd+2 && cut < deltaStart:
+			predicate = "github_git_delta_base"
 		}
+		t.Run("prefix-"+strconv.Itoa(cut), func(t *testing.T) {
+			got, err := originalGitUnpack(originalDeltaPhase(t), prefix, 4096, 2)
+			originalDeltaRefusal(t, got, err, predicate)
+		})
 	}
 	// Corrupt every compressed/header byte and reseal; mutations either refuse
 	// or produce exact commits at their independently recomputed content OIDs.

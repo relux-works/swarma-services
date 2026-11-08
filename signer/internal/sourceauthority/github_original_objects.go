@@ -334,7 +334,12 @@ func originalGitPackSection(p *acquisitionPhase, b []byte) ([]byte, error) {
 			if c == 1 {
 				break
 			}
-			if n == 256 || c != -1 || !(bytes.HasPrefix(line, []byte("shallow ")) && len(line) == 49 && line[48] == '\n' && lowerHex(string(line[8:48]), 40)) {
+			// Stock Git omits LF here. Accept only the exact OID payload or
+			// that payload followed by one LF; other suffixes remain invalid.
+			if len(line) == 49 && line[48] == '\n' {
+				line = line[:48]
+			}
+			if n == 256 || c != -1 || !(bytes.HasPrefix(line, []byte("shallow ")) && len(line) == 48 && lowerHex(string(line[8:48]), 40)) {
 				return nil, unavailable("github_git_shallow")
 			}
 		}
